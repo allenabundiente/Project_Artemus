@@ -1,0 +1,379 @@
+/* CodeBook Arcade — medieval pixel styling on a torch-lit dungeon palette.
+   The CRT scanline overlay is a shared aesthetic layer and is unchanged. */
+:root {
+  --d-black: #140d0a;      /* near-black outline */
+  --d-dungeon: #2a1f2e;    /* deep dungeon purple-brown (page bg) */
+  --d-brick: #4f2a25;      /* deep red-brown (dungeon brick) */
+  --d-wood: #8b5a2b;       /* wood brown */
+  --d-darkwood: #533a1e;   /* dark wood */
+  --d-stone: #5c554e;      /* stone grey */
+  --d-stone-mid: #706a62;  /* mid stone */
+  --d-stone-light: #b8b2a6;/* light stone */
+  --d-parchment: #f2e8d5;  /* parchment white */
+  --d-red: #a82a2a;        /* deep heraldic red */
+  --d-rose: #c95d7a;       /* rose (banners) */
+  --d-orange: #d97d2b;     /* torch orange */
+  --d-gold: #e8b43c;       /* gold accent */
+  --d-gold-bright: #ffd76a;/* bright gold */
+  --d-moss: #3f5d3a;       /* mossy green */
+  --d-goblin: #6f9c3d;     /* goblin green */
+  --d-steel: #7fb3cb;      /* steel blue */
+  --d-mythril: #b7c9ff;    /* mythril silvery-blue */
+  --d-diamond: #8fd7ff;    /* diamond light blue */
+  --d-copper: #c86a3c;     /* copper bronze */
+  --d-iron: #9aa0a8;       /* iron grey */
+  --d-skin: #d8b98a;       /* parchment/skin */
+
+  --font-arcade: 'Press Start 2P', monospace;
+  --font-term: 'VT323', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--d-dungeon);
+  color: var(--d-parchment);
+}
+
+img,
+canvas {
+  image-rendering: pixelated;
+}
+
+.pixel-font {
+  font-family: var(--font-arcade);
+}
+
+.term-font {
+  font-family: var(--font-term);
+}
+
+/* ------------------------------------------------------------------ */
+/* CRT overlay — UNCHANGED from the original theme                     */
+/* ------------------------------------------------------------------ */
+.crt-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.22) 0px, rgba(0, 0, 0, 0.22) 1px, transparent 1px, transparent 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.45) 100%);
+  mix-blend-mode: multiply;
+}
+
+/* ------------------------------------------------------------------ */
+/* Buttons & panels — stone/wood with gold fittings                    */
+/* ------------------------------------------------------------------ */
+.pixel-btn {
+  font-family: var(--font-arcade);
+  font-size: 1rem;
+  padding: 0.55rem 1.1rem;
+  background: var(--d-wood);
+  color: var(--d-parchment);
+  border: 3px solid var(--d-black);
+  box-shadow: 3px 3px 0 var(--d-black);
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: transform 0.05s;
+}
+
+.pixel-btn:hover {
+  background: var(--d-orange);
+  transform: translate(-1px, -1px);
+}
+
+.pixel-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+
+.pixel-btn--primary {
+  background: var(--d-red);
+}
+
+.pixel-btn--gold {
+  background: var(--d-gold);
+  color: var(--d-black);
+}
+
+.pixel-btn--ghost {
+  background: transparent;
+  color: var(--d-gold);
+}
+
+.pixel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pixel-panel {
+  background: linear-gradient(180deg, #35282e 0%, var(--d-brick) 100%);
+  border: 3px solid var(--d-black);
+  outline: 2px solid var(--d-gold);
+  outline-offset: -5px;
+  box-shadow: 4px 4px 0 var(--d-black);
+  padding: 1rem;
+  color: var(--d-parchment);
+}
+
+.pixel-panel--parchment {
+  background: var(--d-parchment);
+  border: 3px solid var(--d-black);
+  outline: 2px solid var(--d-wood);
+  outline-offset: -5px;
+  color: var(--d-black);
+}
+
+.pixel-panel--stone {
+  background: linear-gradient(180deg, #6b655d 0%, var(--d-stone) 100%);
+  border: 3px solid var(--d-black);
+  color: var(--d-parchment);
+}
+
+/* ------------------------------------------------------------------ */
+/* HUD                                                                 */
+/* ------------------------------------------------------------------ */
+.hud {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  font-family: var(--font-arcade);
+  font-size: 1.1rem;
+  color: var(--d-parchment);
+  text-shadow: 2px 2px 0 var(--d-black);
+}
+
+.hud .label {
+  color: var(--d-gold);
+}
+
+.coin-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Challenge dialog — parchment scroll                                 */
+/* ------------------------------------------------------------------ */
+.dialog-box {
+  background: var(--d-parchment);
+  border: 4px solid var(--d-darkwood);
+  outline: 2px solid var(--d-gold);
+  outline-offset: -6px;
+  box-shadow: 6px 6px 0 var(--d-black);
+  padding: 1.2rem 1.5rem;
+  color: var(--d-black);
+  font-family: var(--font-term);
+  font-size: 1.05rem;
+  line-height: 1.4;
+}
+
+.code-block {
+  background: var(--d-black);
+  color: var(--d-gold-bright);
+  border: 3px solid var(--d-darkwood);
+  padding: 0.6rem 0.9rem;
+  font-family: var(--font-term);
+  font-size: 0.95rem;
+  white-space: pre;
+  overflow-x: auto;
+  line-height: 1.35;
+}
+
+.option-btn {
+  font-family: var(--font-term);
+  font-size: 1rem;
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  background: #e6d9bd;
+  color: var(--d-black);
+  border: 2px solid var(--d-wood);
+  cursor: pointer;
+  width: 100%;
+}
+
+.option-btn:hover {
+  background: var(--d-gold-bright);
+}
+
+.option-btn--correct {
+  background: var(--d-goblin);
+  border-color: var(--d-black);
+}
+
+.option-btn--wrong {
+  background: var(--d-red);
+  border-color: var(--d-orange);
+  color: var(--d-parchment);
+}
+
+/* ------------------------------------------------------------------ */
+/* Realm map                                                            */
+/* ------------------------------------------------------------------ */
+.map-node {
+  width: 34px;
+  height: 34px;
+  border-radius: 0;
+  border: 3px solid var(--d-black);
+  font-family: var(--font-arcade);
+  font-size: 1rem;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.map-node--locked {
+  background: var(--d-stone);
+  color: var(--d-stone);
+}
+
+.map-node--open {
+  background: var(--d-gold);
+  color: var(--d-black);
+}
+
+.map-node--done {
+  background: var(--d-goblin);
+  color: var(--d-black);
+}
+
+.map-node--current {
+  outline: 3px solid var(--d-parchment);
+}
+
+/* ------------------------------------------------------------------ */
+/* Ranks & badges                                                       */
+/* ------------------------------------------------------------------ */
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: var(--font-arcade);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+}
+
+.rank-badge img {
+  image-rendering: pixelated;
+}
+
+.rank--mythril { color: var(--d-mythril); }
+.rank--diamond { color: var(--d-diamond); }
+.rank--gold { color: var(--d-gold); }
+.rank--iron { color: var(--d-iron); }
+.rank--copper { color: var(--d-copper); }
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 2px solid rgba(0, 0, 0, 0.25);
+}
+
+.leaderboard-row--me {
+  background: rgba(232, 180, 60, 0.15);
+  outline: 2px solid var(--d-gold);
+}
+
+.leaderboard-pos {
+  font-family: var(--font-arcade);
+  font-size: 0.7rem;
+  min-width: 2.2rem;
+  color: var(--d-gold);
+}
+
+/* ------------------------------------------------------------------ */
+/* Forms                                                                */
+/* ------------------------------------------------------------------ */
+.pixel-input {
+  font-family: var(--font-term);
+  font-size: 1.1rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--d-parchment);
+  color: var(--d-black);
+  border: 3px solid var(--d-darkwood);
+  width: 100%;
+}
+
+.pixel-input:focus {
+  outline: 2px solid var(--d-gold);
+}
+
+.pixel-select {
+  font-family: var(--font-term);
+  font-size: 1.05rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--d-parchment);
+  color: var(--d-black);
+  border: 3px solid var(--d-darkwood);
+}
+
+/* ------------------------------------------------------------------ */
+/* Misc                                                                 */
+/* ------------------------------------------------------------------ */
+.title-screen h1 {
+  font-family: var(--font-arcade);
+  font-size: 2.4rem;
+  letter-spacing: 2px;
+  color: var(--d-gold);
+  text-shadow: 3px 3px 0 var(--d-red), 6px 6px 0 var(--d-black);
+}
+
+.status-text {
+  font-family: var(--font-term);
+  color: var(--d-gold);
+}
+
+.error-text {
+  font-family: var(--font-term);
+  color: var(--d-rose);
+}
+
+.boss-hp {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.boss-hp .hp-cell {
+  width: 22px;
+  height: 14px;
+  background: var(--d-red);
+  border: 2px solid var(--d-black);
+}
+
+.boss-hp .hp-cell--empty {
+  background: var(--d-stone);
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.blink {
+  animation: blink 0.8s steps(2) infinite;
+}
+
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+
+/* Canvas scaling: crisp pixels, integer scaling */
+#game-canvas {
+  width: min(100%, 960px);
+  aspect-ratio: 320 / 180;
+  image-rendering: pixelated;
+  background: var(--d-dungeon);
+  border: 4px solid var(--d-black);
+  outline: 2px solid var(--d-gold);
+  outline-offset: -6px;
+}

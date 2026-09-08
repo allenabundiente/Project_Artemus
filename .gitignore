@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-electron/
+backend/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+release/
+*.log
+backend/data/arcade.db-*
+.DS_Store

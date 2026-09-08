@@ -1,0 +1,202 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import * as api from '../api';
+import type { AuthUser, BookMeta, RosterEntry, Term, TermSettings } from '../types';
+import GuildSettings from './GuildSettings';
+import Leaderboard from './Leaderboard';
+
+interface Props {
+  user: AuthUser;
+  guild: { id: string; name: string; passcode?: string } | null;
+  onRefreshUser: () => Promise<void>;
+  onSignOut: () => void;
+}
+
+type View = 'home' | 'settings' | 'leaderboard';
+
+export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut }: Props) {
+  const [view, setView] = useState<View>('home');
+  const [guildName, setGuildName] = useState('');
+  const [passcode, setPasscode] = useState(guild?.passcode ?? '');
+  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [books, setBooks] = useState<BookMeta[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [term, setTerm] = useState<Term>('prelims');
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const refreshGuildData = useCallback(async () => {
+    setError(null);
+    try {
+      const mine = await api.getMyGuild();
+      if (mine.guild) {
+        setPasscode(mine.guild.passcode ?? '');
+        setRoster(mine.roster ?? []);
+      }
+      setBooks(await api.listBooks());
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshGuildData();
+  }, [refreshGuildData]);
+
+  async function handleCreateGuild() {
+    setError(null);
+    setBusy('Founding guild…');
+    try {
+      const res = await api.createGuild(guildName);
+      setPasscode(res.guild.passcode ?? '');
+      setNotice(`Guild "${res.guild.name}" founded! Share passcode ${res.guild.passcode} with your students.`);
+      await onRefreshUser();
+      await refreshGuildData();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRegeneratePasscode() {
+    if (!window.confirm('Regenerate the passcode? The old one stops working immediately.')) return;
+    try {
+      const res = await api.regeneratePasscode();
+      setPasscode(res.passcode);
+      setNotice(`New passcode: ${res.passcode}`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function handleUpload(file: File) {
+    setError(null);
+    setNotice(null);
+    setBusy('Deciphering the ancient tome…');
+    try {
+      const up = await api.uploadPdf(file);
+      setBusy('Summoning monsters…');
+      const gen = await api.generateChallenges(up.bookId, term);
+      setNotice(`"${up.title}" assigned to the guild — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
+      await refreshGuildData();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div style={{ minHeight: '100vh', padding: '1.5rem', position: 'relative' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        <div className="hud">
+          <span>🏰 {user.name}</span>
+          {guild && <span className="label">GUILD MASTER of {guild.name}</span>}
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {view !== 'home' && <button className="pixel-btn pixel-btn--ghost" onClick={() => setView('home')}>◀ HALL</button>}
+          <button className="pixel-btn pixel-btn--ghost" onClick={onSignOut}>SIGN OUT</button>
+        </div>
+      </div>
+
+      {error && <p className="error-text">{error}</p>}
+      {notice && <p className="status-text">{notice}</p>}
+
+      {view === 'home' && (
+        <>
+          {!guild && (
+            <div className="pixel-panel" style={{ maxWidth: 520, margin: '0 auto 1.25rem' }}>
+              <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>FOUND YOUR GUILD</p>
+              <p className="term-font" style={{ color: 'var(--d-stone-light)' }}>
+                Name your guild — students join with the passcode you receive.
+              </p>
+              <input className="pixel-input" placeholder="GUILD NAME" value={guildName} onChange={(e) => setGuildName(e.target.value)} style={{ marginBottom: '0.6rem' }} />
+              <button className="pixel-btn pixel-btn--primary" onClick={handleCreateGuild} disabled={!!busy || guildName.trim().length < 2}>
+                {busy ?? 'FOUND GUILD'}
+              </button>
+            </div>
+          )}
+
+          {guild && (
+            <>
+              <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
+                <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>🏰 {guild.name.toUpperCase()}</p>
+                <p className="term-font" style={{ fontSize: '1.15rem', margin: '0.2rem 0 0.6rem' }}>
+                  Student passcode: <strong style={{ color: 'var(--d-gold)', fontSize: '1.5rem', letterSpacing: '0.2em' }}>{passcode}</strong>
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem' }} onClick={handleRegeneratePasscode}>
+                    REGENERATE PASSCODE
+                  </button>
+                  <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.6rem' }} onClick={() => setView('settings')}>
+                    ⚙ GUILD SETTINGS
+                  </button>
+                  <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem' }} onClick={() => setView('leaderboard')}>
+                    ⚔ LEADERBOARD
+                  </button>
+                </div>
+              </div>
+
+              <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
+                <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>📜 ASSIGN A TOME (PDF)</p>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/pdf"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleUpload(f);
+                    e.target.value = '';
+                  }}
+                />
+                <select className="pixel-select" value={term} onChange={(e) => setTerm(e.target.value as Term)} style={{ marginRight: '0.4rem' }}>
+                  {(['prelims', 'midterms', 'semis', 'finals'] as Term[]).map((t) => (
+                    <option key={t} value={t}>{t.toUpperCase()}</option>
+                  ))}
+                </select>
+                <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>
+                  {busy ?? 'UPLOAD & ASSIGN'}
+                </button>
+                <p className="term-font" style={{ color: 'var(--d-stone-light)', marginBottom: 0, marginTop: '0.5rem' }}>
+                  Monsters are generated using the selected term's difficulty settings.
+                </p>
+              </div>
+
+              <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
+                <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>ADVENTURERS ({roster.length})</p>
+                {roster.length === 0 && <p className="status-text" style={{ margin: 0 }}>No students have joined yet — share the passcode.</p>}
+                {roster.map((m) => (
+                  <div key={m.id} className="leaderboard-row">
+                    <span className="term-font" style={{ fontSize: '1.15rem', flex: 1 }}>{m.name}</span>
+                    <span className="pixel-font" style={{ fontSize: '0.6rem', color: 'var(--d-stone-light)' }}>
+                      last active {new Date(m.lastActive).toLocaleDateString()}
+                    </span>
+                    <span className="pixel-font" style={{ fontSize: '0.7rem', color: 'var(--d-gold)' }}>{m.score}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto' }}>
+                <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>ASSIGNED TOMES</p>
+                {books.length === 0 && <p className="status-text" style={{ margin: 0 }}>No tomes assigned yet.</p>}
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                  {books.map((b) => (
+                    <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>▸ {b.title}</li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {view === 'settings' && guild && <GuildSettings onSaved={() => setNotice('Guild settings saved. New monster generations will use them.')} />}
+
+      {view === 'leaderboard' && guild && (
+        <Leaderboard userRole="teacher" userGuildId={guild.id} currentUserId={user.id} />
+      )}
+    </div>
+  );
+}

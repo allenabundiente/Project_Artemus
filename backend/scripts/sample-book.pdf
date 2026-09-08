@@ -1,0 +1,58 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 648 >>
+stream
+BT /F1 20 Tf 1 0 0 1 72 720 Tm (Learning Python Basics) Tj /F1 16 Tf 1 0 0 1 72 690 Tm (Chapter 1: Variables and Types) Tj /F1 12 Tf 1 0 0 1 72 664 Tm (A variable is a named location in memory that stores a value.) Tj /F1 12 Tf 1 0 0 1 72 642 Tm (In Python, you create a variable by assigning a value to a name.) Tj /F1 12 Tf 1 0 0 1 72 620 Tm (An integer is a whole number. A string is a sequence of characters.) Tj /F2 11 Tf 1 0 0 1 72 598 Tm (age = 25) Tj /F2 11 Tf 1 0 0 1 72 577 Tm (name = "Ada") Tj /F2 11 Tf 1 0 0 1 72 556 Tm (print\(name, age\)) Tj /F1 12 Tf 1 0 0 1 72 535 Tm (The print function writes its arguments to the console.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 567 >>
+stream
+BT /F1 16 Tf 1 0 0 1 72 720 Tm (Chapter 2: Functions) Tj /F1 12 Tf 1 0 0 1 72 694 Tm (A function is a reusable block of code that performs one task.) Tj /F1 12 Tf 1 0 0 1 72 672 Tm (Functions help you avoid repeating yourself and make code testable.) Tj /F2 11 Tf 1 0 0 1 72 650 Tm (def greet\(name\):) Tj /F2 11 Tf 1 0 0 1 72 629 Tm (    return "Hello, " + name) Tj /F2 11 Tf 1 0 0 1 72 608 Tm (message = greet\("World"\)) Tj /F2 11 Tf 1 0 0 1 72 587 Tm (print\(message\)) Tj /F1 12 Tf 1 0 0 1 72 566 Tm (The return statement sends a value back to the caller.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 573 >>
+stream
+BT /F1 16 Tf 1 0 0 1 72 720 Tm (Chapter 3: Loops) Tj /F1 12 Tf 1 0 0 1 72 694 Tm (A for loop repeats a block of code once for each item in a sequence.) Tj /F1 12 Tf 1 0 0 1 72 672 Tm (A while loop repeats as long as its condition remains true.) Tj /F2 11 Tf 1 0 0 1 72 650 Tm (for i in range\(3\):) Tj /F2 11 Tf 1 0 0 1 72 629 Tm (    print\(i\)) Tj /F2 11 Tf 1 0 0 1 72 608 Tm (count = 0) Tj /F2 11 Tf 1 0 0 1 72 587 Tm (while count < 3:) Tj /F2 11 Tf 1 0 0 1 72 566 Tm (    count = count + 1) Tj /F1 12 Tf 1 0 0 1 72 545 Tm (Loops can be nested inside other loops.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+10 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000264 00000 n 
+0000000963 00000 n 
+0000001100 00000 n 
+0000001718 00000 n 
+0000001855 00000 n 
+0000002479 00000 n 
+0000002549 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+2618
+%%EOF

@@ -414,6 +414,21 @@ export function createApiRouter(): Router {
     });
   });
 
+  // Express 4 does not catch rejected promises from async handlers — wrap each
+  // route's handle in place so rejections become 500s, not process crashes.
+  const wrap = (orig: Function) => (req: any, res: any, next: any) =>
+    Promise.resolve(orig(req, res, next)).catch(next);
+  router.stack.forEach((layer: any) => {
+    if (layer.route) {
+      for (const h of layer.route.stack) {
+        if (h.handle.length < 4) {
+          const orig = h.handle;
+          h.handle = wrap(orig);
+        }
+      }
+    }
+  });
+
   // --- Coins ----------------------------------------------------------------------------
 
   router.get('/coins', requireAuth, async (req, res) => {

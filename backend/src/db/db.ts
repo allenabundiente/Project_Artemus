@@ -353,7 +353,7 @@ export async function getLeaderboard(guildId: string | null, term: string | null
             COALESCE(SUM(s.raw_score), 0)::int AS term_score,
             COUNT(s.id)::int AS quest_count
      FROM users u
-     LEFT JOIN scores s ON s.user_id = u.id AND ($2::text IS NULL OR s.term = $2::academic_term::text)
+     LEFT JOIN scores s ON s.user_id = u.id AND ($2::text IS NULL OR s.term::text = $2::text)
      WHERE u.role = 'student' AND (($1::uuid IS NOT NULL AND u.guild_id = $1::uuid) OR ($1::uuid IS NULL AND u.guild_id IS NULL))
      GROUP BY u.id, u.name
      ORDER BY term_score DESC, u.name ASC`,
@@ -365,7 +365,7 @@ export async function getLeaderboard(guildId: string | null, term: string | null
 export async function getTermScore(userId: string, term: string | null): Promise<number> {
   const row = await queryOne<{ total: string }>(
     `SELECT COALESCE(SUM(raw_score), 0)::text AS total FROM scores
-     WHERE user_id = $1 AND ($2::text IS NULL OR term = $2::academic_term::text)`,
+     WHERE user_id = $1 AND ($2::text IS NULL OR term::text = $2::text)`,
     [userId, term]
   );
   return row ? Number(row.total) : 0;

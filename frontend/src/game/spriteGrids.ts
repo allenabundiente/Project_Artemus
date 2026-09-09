@@ -26,6 +26,13 @@ export const PALETTE: Record<string, [number, number, number]> = {
   s: [0x70, 0x6a, 0x62], // mid stone
   t: [0xff, 0xa1, 0x3d], // torch flame
   e: [0x3a, 0x2c, 0x22], // earth dark
+  // Avatar recolor channels (see game/avatar.ts): green-dominant pixels are
+  // the "chroma" the wardrobe tints — bright H takes the tint, darker h takes
+  // the tint's shade. Everything else (skin, metal, gold, outlines) passes
+  // through untouched.
+  H: [0x00, 0xe4, 0x36], // recolorable LIGHT garment zone
+  h: [0x00, 0x8a, 0x22], // recolorable SHADE garment zone
+  S: [0xd8, 0xb9, 0x8a], // skin (same tone as 'c', named for avatar grids)
 };
 
 export interface SpriteDef {

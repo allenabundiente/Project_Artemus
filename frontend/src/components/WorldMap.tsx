@@ -88,7 +88,7 @@ export default function WorldMap({ book, progress, term, onEnterLevel }: Props) 
       </div>
 
       <p className="term-font" style={{ color: 'var(--d-stone-light)' }}>
-        Controls: ←/→ or A/D to move · Space/↑/W to jump. Strike a monster to face its challenge. Wrong answers cost a heart. Reach the castle gate to wake the dungeon boss.
+        Controls: ←/→ or A/D to move · W to jump. Strike a monster to face its challenge. Wrong answers cost a heart. Reach the castle gate to wake the dungeon boss.
       </p>
     </div>
   );

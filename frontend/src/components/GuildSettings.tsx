@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../api';
-import type { Term, TermSettings } from '../types';
+import type { LlmStatus, Term, TermSettings } from '../types';
 
 interface Props {
   onSaved: () => void;
@@ -20,6 +20,14 @@ export default function GuildSettings({ onSaved }: Props) {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [llm, setLlm] = useState<LlmStatus | null>(null);
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [regenResult, setRegenResult] = useState<string | null>(null);
+  const [regenError, setRegenError] = useState<string | null>(null);
+  // Map skin: 'teacher' = this guild's chosen realm; null theme = follow the admin config.
+  const [themes, setThemes] = useState<{ id: string; name: string }[]>([]);
+  const [mapTheme, setMapTheme] = useState<string | null>(null);
+  const [mapSaved, setMapSaved] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -31,7 +39,21 @@ export default function GuildSettings({ onSaved }: Props) {
         setError((e as Error).message);
       }
     })();
+    api.getLlmStatus().then(setLlm).catch(() => setLlm(null));
+    api.getThemes().then((r) => setThemes(r.themes)).catch(() => setThemes([]));
+    api.getGuildMap().then((r) => setMapTheme(r.theme)).catch(() => setMapTheme(null));
   }, []);
+
+  async function saveMap(theme: string | null) {
+    setMapTheme(theme);
+    try {
+      await api.setGuildMap(theme);
+      setMapSaved(true);
+      window.setTimeout(() => setMapSaved(false), 2000);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   const current = settings[activeTerm];
 
@@ -76,6 +98,21 @@ export default function GuildSettings({ onSaved }: Props) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function regenerateAll() {
+    setRegenBusy(true);
+    setRegenError(null);
+    setRegenResult(null);
+    try {
+      const res = await api.regenerateAllChallenges(activeTerm);
+      const parts = res.results.map((r) => `${r.title}: ${r.challengeCount} challenges${r.llmFailures ? ` (${r.llmFailures} heuristic fallbacks)` : ''}`);
+      setRegenResult(`Regenerated with ${res.mode === 'llm' ? 'the AI model' : 'offline heuristics'} — ${parts.join('; ')}`);
+    } catch (e) {
+      setRegenError((e as Error).message);
+    } finally {
+      setRegenBusy(false);
     }
   }
 
@@ -216,6 +253,54 @@ export default function GuildSettings({ onSaved }: Props) {
           <button className="pixel-btn pixel-btn--primary" onClick={save} disabled={busy || !dirty}>
             {busy ? 'SAVING…' : dirty ? 'SAVE SETTINGS' : 'SAVED'}
           </button>
+        </div>
+      </div>
+
+      <div className="pixel-panel" style={{ marginTop: '1rem' }}>
+        <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>🧙 AI CHALLENGE SMITH</p>
+        <p className="term-font" style={{ fontSize: '1.05rem', margin: '0.3rem 0 0.8rem' }}>
+          {llm === null && 'Checking the smithy…'}
+          {llm?.provider === 'none' && (
+            <>
+              Mode: <b>offline heuristics</b> — no AI model configured. Set ANTHROPIC_API_KEY, or a free
+              OpenAI-compatible provider (OPENAI_BASE_URL + OPENAI_API_KEY + LLM_MODEL — OpenRouter, Gemini,
+              Groq, or local Ollama via <code>backend/scripts/setup-ollama.sh</code>), then restart the backend.
+            </>
+          )}
+          {llm?.provider === 'anthropic' && <>Mode: <b>Anthropic</b> · model: <b>{llm.model}</b></>}
+          {llm?.provider === 'openai_compat' && (
+            <>
+              Mode: <b>OpenAI-compatible</b> · endpoint: <b>{llm.baseUrl}</b> · model: <b>{llm.model}</b>
+            </>
+          )}
+        </p>
+        <p className="term-font" style={{ fontSize: '1rem', margin: '0 0 0.8rem', opacity: 0.85 }}>
+          Regenerating replaces every challenge in your guild's tomes with freshly generated ones for the
+          selected term ({TERM_LABEL[activeTerm]}). Students' scores and coins are kept.
+        </p>
+        <button className="pixel-btn pixel-btn--gold" onClick={regenerateAll} disabled={regenBusy || !llm}>
+          {regenBusy ? '🔥 REFORGING… (this can take a while)' : '⚒ REGENERATE ALL CHALLENGES'}
+        </button>
+        {regenResult && <p className="term-font" style={{ fontSize: '1rem', marginTop: '0.6rem', color: 'var(--d-gold)' }}>{regenResult}</p>}
+        {regenError && <p className="error-text" style={{ marginTop: '0.6rem' }}>{regenError}</p>}
+      </div>
+
+      <div className="pixel-panel" style={{ marginTop: '1rem' }}>
+        <p className="pixel-font" style={{ fontSize: '0.75rem', margin: '0 0 0.25rem' }}>🗺 MAP SKIN</p>
+        <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0 0 0.6rem' }}>
+          Choose the realm your students quest in. "Follow the crown" uses the admin's global
+          config (which may randomize by difficulty).
+        </p>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <select
+            className="pixel-select"
+            value={mapTheme ?? ''}
+            onChange={(e) => void saveMap(e.target.value === '' ? null : e.target.value)}
+          >
+            <option value="">👑 Follow the crown (admin config)</option>
+            {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+          {mapSaved && <span className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-gold)' }}>Saved!</span>}
         </div>
       </div>
     </div>

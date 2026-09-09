@@ -53,9 +53,93 @@ export interface GenerateResult {
   mode: 'llm' | 'heuristic';
 }
 
+export interface LlmStatus {
+  provider: 'anthropic' | 'openai_compat' | 'none';
+  mode: string;
+  model: string | null;
+  baseUrl: string | null;
+}
+
+export interface RegenerateAllResult {
+  term: string;
+  mode: 'llm' | 'heuristic';
+  results: { bookId: string; title: string; challengeCount: number; llmFailures: number }[];
+}
+
 // --- auth & roles -------------------------------------------------------------
 
-export type Role = 'teacher' | 'student';
+export type Role = 'teacher' | 'student' | 'admin';
+
+// --- avatar / wardrobe ------------------------------------------------------------
+
+export type AvatarPart = 'hair' | 'armor' | 'helmet' | 'cape';
+
+export interface AvatarPrefs {
+  sex: 'male' | 'female';
+  hair: string;
+  armor: string;
+  helmet: string;
+  cape: string;
+  color: string;
+}
+
+export interface AvatarSetDef {
+  id: string;
+  name: string;
+  sku: string;
+  price: number;
+  description: string;
+}
+
+export interface ShopItem {
+  id: string;
+  sku: string;
+  name: string;
+  description: string;
+  category: 'hair' | 'armor' | 'helmet' | 'cape' | 'pack';
+  kind: string;
+  price: number;
+  sort: number;
+}
+
+export interface WardrobeResponse {
+  sets: Record<AvatarPart, AvatarSetDef[]>;
+  unlocked: Record<AvatarPart, string[]>;
+  colors: { hex: string; name: string }[];
+  avatar: AvatarPrefs;
+}
+
+export interface FeatureRow {
+  key: string;
+  label: string;
+  locked: boolean;
+}
+
+export interface MapConfig {
+  mode: 'fixed' | 'random_by_difficulty';
+  fixedTheme: string;
+}
+
+export interface ThemeMeta {
+  id: string;
+  name: string;
+}
+
+export interface MapResolve {
+  theme: string;
+  source: 'guild' | 'admin' | 'random';
+}
+
+export interface LessonOverview {
+  title: string;
+  objectives: string[];
+  intro: string;
+  sections: { heading: string; summary: string }[];
+  keyTerms: { term: string; definition: string }[];
+  example?: { language: string; code: string; caption: string };
+  tip?: string;
+  source: 'heuristic' | 'llm';
+}
 
 export interface AuthUser {
   id: string;
@@ -64,6 +148,7 @@ export interface AuthUser {
   role: Role;
   guildId: string | null;
   coins: number;
+  avatar?: AvatarPrefs;
 }
 
 export interface AuthResponse {
@@ -86,6 +171,8 @@ export interface RosterEntry {
   rank: string;
   score: number;
   lastActive: string;
+  /** Equipped avatar (sanitized server-side). */
+  avatar?: AvatarPrefs;
 }
 
 // --- ranks & leaderboard ----------------------------------------------------------
@@ -98,6 +185,8 @@ export interface LeaderboardEntry {
   termScore: number;
   questCount: number;
   rank: string;
+  /** Equipped avatar (sanitized server-side). */
+  avatar?: AvatarPrefs;
 }
 
 export interface LeaderboardResponse {
@@ -134,7 +223,11 @@ export interface TermSettings {
 export interface ScoreResultResponse {
   scoreId: string;
   rawScore: number;
+  /** What the run banked: the full award on success, net-of-penalty on fail. */
   coinsAwarded: number;
+  /** Fail runs only: random penalty taken from this run's gathered coins. */
+  coinsPenalty?: number;
+  /** Server-confirmed total balance AFTER this quest settled. */
   coins: number;
   breakdown: { label: string; value: number }[];
   rank: RankName | string;

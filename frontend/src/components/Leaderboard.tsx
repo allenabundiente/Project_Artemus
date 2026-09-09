@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api';
 import type { LeaderboardResponse, Term } from '../types';
 import RankBadge from './RankBadge';
+import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 
 interface Props {
   userRole: 'teacher' | 'student';
@@ -81,6 +82,7 @@ export default function Leaderboard({ userRole, userGuildId, currentUserId }: Pr
               {data.entries.map((e, i) => (
                 <div key={e.userId} className={`leaderboard-row ${e.userId === currentUserId ? 'leaderboard-row--me' : ''}`}>
                   <span className="leaderboard-pos">#{i + 1}</span>
+                  <AvatarSprite avatar={e.avatar ?? DEFAULT_AVATAR} size={26} animate={e.userId === currentUserId} title={`${e.name}'s heraldic avatar`} />
                   <RankBadge rank={e.rank} size={22} />
                   <span className="term-font" style={{ fontSize: '1.15rem', flex: 1 }}>{e.name}</span>
                   <span className="term-font" style={{ fontSize: '1.05rem', color: 'var(--d-stone-light)' }}>

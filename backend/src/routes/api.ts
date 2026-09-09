@@ -2,20 +2,81 @@ import { Router, json } from 'express';
 import multer from 'multer';
 import { parsePdf } from '../services/pdfParser.js';
 import { generateWithLlm, generateHeuristically, type ChapterContent, type GenerationOptions } from '../services/contentGenerator.js';
+import { isLlmConfigured, activeProvider, llmModeLabel } from '../services/llmClient.js';
 import { computeScore, DEFAULT_SCORE_WEIGHTS, type ScoreWeights } from '../services/scoring.js';
 import { resolveTermSettings, sanitizeTermSettings, TERMS, type TermSettings } from '../services/termSettings.js';
+import { buildLessonOverview } from '../services/lesson.js';
 import { hashPassword, verifyPassword, requireAuth, requireRole, signToken } from '../services/auth.js';
+import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
+import { registerAdminRoutes } from './admin.js';
 import {
-  initDbResilient, query, queryOne,
+  initDbResilient, query, queryOne, withTransaction, applyCoinsTx, insertScoreTx, upsertProgressTx,
   insertBook, insertChapter, insertChallenge, getBook, listBooks,
-  getChapters, getChapter, getChallengesForChapter,
+  getChapters, getChapter, getChallengesForChapter, getChapterWithText,
   countChallenges, deleteChallengesForBook, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
   insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
-  type GuildRow, type UserRow,
+  getGlobalMapConfig, getGuildMapSettings, setGuildMapTheme,
+  type GuildRow, type UserRow, type ChapterRow,
 } from '../db/db.js';
+
+/**
+ * Quest-fail coin penalty: a random fraction of the coins gathered during the
+ * failed run is lost. The penalty NEVER dips into coins banked from earlier
+ * quests — the balance only ever receives max(0, gathered − penalty).
+ */
+const FAIL_PENALTY_MIN_PCT = 0.05; // lose at least 5% of gathered coins
+const FAIL_PENALTY_MAX_PCT = 0.20; // ... and at most 20%
+
+/**
+ * Generate challenges for every chapter of a book, honoring the guild's term
+ * settings. Shared by POST /books/:id/generate and POST /llm/regenerate-all.
+ */
+export async function generateChallengesForBook(
+  bookId: string,
+  term: string,
+  guildSettings: Record<string, unknown> | null
+): Promise<{ challengeCount: number; llmFailures: number; mode: 'llm' | 'heuristic' }> {
+  const ts = resolveTermSettings(term, guildSettings);
+  const genOpts: GenerationOptions = {
+    term,
+    monsterDifficulty: ts.monsterDifficulty,
+    difficultyMix: ts.difficultyMix,
+  };
+  const chapters = await getChapters(bookId);
+  const useLlm = isLlmConfigured();
+  let generated = 0;
+  let llmFailures = 0;
+
+  for (const chapter of chapters.slice(0, 12)) {
+    let content: ChapterContent;
+    try {
+      content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter);
+    } catch (e) {
+      llmFailures++;
+      console.error(`[generate] chapter "${chapter.title}" fell back to heuristics:`, (e as Error).message);
+      content = generateHeuristically(chapter);
+    }
+    for (let i = 0; i < content.challenges.length; i++) {
+      await insertChallenge({ bookId, chapterId: chapter.id, ...content.challenges[i], ord: i });
+    }
+    generated += content.challenges.length;
+  }
+  return { challengeCount: generated, llmFailures, mode: useLlm ? 'llm' : 'heuristic' };
+}
+
+/**
+ * Resolve the acting user's guild: students are members (users.guild_id),
+ * teachers and admins lead one (guilds.teacher_id) — their users.guild_id
+ * stays NULL.
+ */
+async function resolveUserGuild(user: UserRow): Promise<GuildRow | null> {
+  if (user.guildId) return getGuild(user.guildId);
+  if (user.role === 'teacher' || user.role === 'admin') return getGuildByTeacher(user.id);
+  return null;
+}
 
 export function createApiRouter(): Router {
   const router = Router();
@@ -76,8 +137,76 @@ export function createApiRouter(): Router {
   router.get('/me', requireAuth, async (req, res) => {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    const guild = user.guildId ? await getGuild(user.guildId) : null;
-    res.json({ user: publicUser(user), guild: guild ? { id: guild.id, name: guild.name } : null });
+    const guild = await resolveUserGuild(user);
+    const prefs = user.preferences as { avatar?: Record<string, unknown> } | null;
+    res.json({
+      user: { ...publicUser(user), avatar: sanitizeAvatar(prefs?.avatar ?? prefs) },
+      guild: guild ? { id: guild.id, name: guild.name } : null,
+    });
+  });
+
+  // Which map themes exist (used by teacher skin picker + admin panel). Static
+  // metadata lives in the frontend theme registry; the backend just relays the
+  // ids it is allowed to store.
+  router.get('/themes', requireAuth, (_req, res) => {
+    res.json({
+      themes: [
+        { id: 'dungeon', name: 'Dungeon Night' },
+        { id: 'forest', name: 'Firefly Glade' },
+      ],
+    });
+  });
+
+  registerAdminRoutes(router);
+
+  // --- map (theme) resolution ---------------------------------------------------
+  //
+  // Resolution order: teacher's guild skin → admin global config →
+  // random by difficulty (deterministic per chapter+difficulty so all students
+  // in the same chapter+difficulty see the same realm, and revisits match).
+  const DIFFICULTY_THEMES: Record<string, string[]> = {
+    easy: ['forest', 'dungeon'],
+    medium: ['dungeon', 'forest'],
+    hard: ['dungeon'],
+  };
+  router.get('/map/resolve', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+
+    // 1. Teacher set a fixed skin for the guild?
+    const guildTheme = (guild?.mapSettings as { theme?: string } | null)?.theme;
+    if (guildTheme) return res.json({ theme: guildTheme, source: 'guild' as const });
+
+    // 2. Admin global config.
+    const cfg = await getGlobalMapConfig();
+    if (cfg.mode === 'fixed') return res.json({ theme: cfg.fixedTheme, source: 'admin' as const });
+
+    // 3. Random by difficulty — deterministic hash so revisits agree.
+    const diff = typeof req.query.difficulty === 'string' ? req.query.difficulty : 'medium';
+    const pool = DIFFICULTY_THEMES[diff] ?? DIFFICULTY_THEMES.medium;
+    let h = 0;
+    const seed = `${String(req.query.chapterId ?? '')}:${diff}`;
+    for (let i = 0; i < seed.length; i++) h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+    const theme = pool[Math.abs(h) % pool.length];
+    res.json({ theme, source: 'random' as const });
+  });
+
+  // Teacher: get/set their guild's map skin (overrides admin config).
+  router.get('/guilds/mine/map', requireRole('teacher'), async (req, res) => {
+    const guild = await getGuildByTeacher(req.user!.id);
+    if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    const settings = await getGuildMapSettings(guild.id);
+    res.json({ theme: settings?.theme ?? null });
+  });
+
+  router.put('/guilds/mine/map', requireRole('teacher'), async (req, res) => {
+    const guild = await getGuildByTeacher(req.user!.id);
+    if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    const theme = req.body?.theme === null || req.body?.theme === '' ? null : String(req.body?.theme ?? '');
+    if (theme !== null && !/^[a-z0-9_-]{1,32}$/.test(theme)) return res.status(400).json({ error: 'Invalid theme id' });
+    await setGuildMapTheme(guild.id, theme);
+    res.json({ theme });
   });
 
   // --- guilds ------------------------------------------------------------------
@@ -102,7 +231,10 @@ export function createApiRouter(): Router {
     const members = await listGuildMembers(guild.id);
     const roster = await Promise.all(members.map(async (m) => {
       const termScore = await getTermScore(m.id, null);
-      return { id: m.id, name: m.name, rank: rankForScore(termScore), score: termScore, lastActive: m.createdAt };
+      return {
+        id: m.id, name: m.name, rank: rankForScore(termScore), score: termScore, lastActive: m.createdAt,
+        avatar: sanitizeAvatar((m.preferences as { avatar?: unknown })?.avatar ?? m.preferences),
+      };
     }));
     res.json({ guild: { id: guild.id, name: guild.name, passcode: guild.passcode, termSettings: guild.termSettings }, roster });
   });
@@ -120,7 +252,10 @@ export function createApiRouter(): Router {
     const members = await listGuildMembers(guild.id);
     const roster = await Promise.all(members.map(async (m) => {
       const termScore = await getTermScore(m.id, null);
-      return { id: m.id, name: m.name, rank: rankForScore(termScore), score: termScore, lastActive: m.createdAt };
+      return {
+        id: m.id, name: m.name, rank: rankForScore(termScore), score: termScore, lastActive: m.createdAt,
+        avatar: sanitizeAvatar((m.preferences as { avatar?: unknown })?.avatar ?? m.preferences),
+      };
     }));
     res.json({ roster });
   });
@@ -170,7 +305,7 @@ export function createApiRouter(): Router {
   router.get('/terms/current', requireAuth, async (req, res) => {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    const guild = user.guildId ? await getGuild(user.guildId) : null;
+    const guild = await resolveUserGuild(user);
     const term = typeof req.query.term === 'string' && TERMS.includes(req.query.term as any) ? req.query.term : 'prelims';
     const settings = resolveTermSettings(term, guild?.termSettings ?? null);
     res.json({ term, settings, guildId: guild?.id ?? null });
@@ -192,9 +327,9 @@ export function createApiRouter(): Router {
       }
 
       const parsed = await parsePdf(req.file.buffer, fallbackTitle);
-      // Teacher uploads are assigned to the guild they lead; solo students own their books.
+      // Teacher/admin uploads are assigned to the guild they lead; solo students own their books.
       let guildId: string | null = null;
-      if (user.role === 'teacher') {
+      if (user.role === 'teacher' || user.role === 'admin') {
         const guild = await getGuildByTeacher(user.id);
         guildId = guild?.id ?? null;
       }
@@ -221,7 +356,7 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(401).json({ error: 'User not found' });
     const isOwner = book.ownerId === user.id;
-    const isGuildTeacher = book.guildId && user.role === 'teacher' && user.guildId === book.guildId;
+    const isGuildTeacher = book.guildId && (user.role === 'teacher' || user.role === 'admin') && user.guildId === book.guildId;
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
 
     // Cache: if challenges already exist, skip regeneration.
@@ -231,33 +366,44 @@ export function createApiRouter(): Router {
 
     const term = typeof req.body?.term === 'string' ? req.body.term : 'prelims';
     const guild = book.guildId ? await getGuild(book.guildId) : null;
-    const ts = resolveTermSettings(term, guild?.termSettings ?? null);
-    const genOpts: GenerationOptions = {
-      term,
-      monsterDifficulty: ts.monsterDifficulty,
-      difficultyMix: ts.difficultyMix,
-    };
+    const result = await generateChallengesForBook(bookId, term, guild?.termSettings ?? null);
+    res.json({ bookId, cached: false, ...result });
+  });
 
-    const chapters = await getChapters(bookId);
-    const useLlm = !!process.env.ANTHROPIC_API_KEY;
-    let generated = 0;
-    let llmFailures = 0;
+  // --- LLM status + regenerate-all (teacher-only) --------------------------------
 
-    for (const chapter of chapters.slice(0, 12)) {
-      let content: ChapterContent;
-      try {
-        content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter);
-      } catch (e) {
-        llmFailures++;
-        content = generateHeuristically(chapter);
-      }
-      for (let i = 0; i < content.challenges.length; i++) {
-        await insertChallenge({ bookId, chapterId: chapter.id, ...content.challenges[i], ord: i });
-      }
-      generated += content.challenges.length;
+  router.get('/llm/status', requireRole('teacher'), async (_req, res) => {
+    const provider = activeProvider();
+    res.json({
+      provider, // 'anthropic' | 'openai_compat' | 'none'
+      mode: llmModeLabel(),
+      model: provider === 'none' ? null : (process.env.LLM_MODEL || process.env.ANTHROPIC_MODEL || null),
+      baseUrl: provider === 'openai_compat' ? process.env.OPENAI_BASE_URL : null,
+    });
+  });
+
+  /**
+   * Wipe and regenerate challenges for every book the teacher can touch
+   * (guild books for guild leaders, owned books otherwise). Slow with a local
+   * LLM — the frontend shows progress and can keep playing meanwhile.
+   */
+  router.post('/llm/regenerate-all', requireRole('teacher'), async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = user.role === 'teacher' || user.role === 'admin' ? await getGuildByTeacher(user.id) : null;
+    const books = (await listBooks(user.id, guild?.id ?? null)).filter((b) =>
+      guild ? b.guildId === guild.id : b.ownerId === user.id
+    );
+    if (books.length === 0) return res.status(404).json({ error: 'No books to regenerate' });
+
+    const term = typeof req.body?.term === 'string' && TERMS.includes(req.body.term as any) ? req.body.term : 'prelims';
+    const results: { bookId: string; title: string; challengeCount: number; llmFailures: number }[] = [];
+    for (const book of books) {
+      await deleteChallengesForBook(book.id);
+      const r = await generateChallengesForBook(book.id, term, guild?.termSettings ?? null);
+      results.push({ bookId: book.id, title: book.title, challengeCount: r.challengeCount, llmFailures: r.llmFailures });
     }
-
-    res.json({ bookId, cached: false, challengeCount: generated, llmFailures, mode: useLlm ? 'llm' : 'heuristic' });
+    res.json({ term, mode: isLlmConfigured() ? 'llm' : 'heuristic', results });
   });
 
   // --- Books / chapters / challenges (owner- or guild-scoped) ----------------------
@@ -265,7 +411,8 @@ export function createApiRouter(): Router {
   router.get('/books', requireAuth, async (req, res) => {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(401).json({ error: 'User not found' });
-    const books = await listBooks(user.id, user.guildId);
+    const guild = await resolveUserGuild(user);
+    const books = await listBooks(user.id, guild?.id ?? null);
     res.json(books);
   });
 
@@ -296,13 +443,27 @@ export function createApiRouter(): Router {
     res.json({ chapter: { id: chapter.id, title: chapter.title }, challenges: await getChallengesForChapter(chapterId) });
   });
 
+  // Lesson overview shown before a student starts the quest. Same access
+  // rules as the challenges endpoint — guild members or the book owner.
+  router.get('/books/:id/chapters/:chapterId/lesson', requireAuth, async (req, res) => {
+    const chapter = await getChapterWithText(String(req.params.chapterId));
+    if (!chapter || chapter.bookId !== String(req.params.id)) {
+      return res.status(404).json({ error: 'Chapter not found' });
+    }
+    const book = await getBook(chapter.bookId);
+    const user = await getUserById(req.user!.id);
+    const allowed = book && (book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId));
+    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+    res.json(buildLessonOverview(chapter));
+  });
+
   router.post('/books/:id/regenerate', requireAuth, async (req, res) => {
     const bookId = String(req.params.id);
     const book = await getBook(bookId);
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
     const isOwner = book.ownerId === user?.id;
-    const isGuildTeacher = book.guildId && user?.role === 'teacher' && user?.guildId === book.guildId;
+    const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
     await deleteChallengesForBook(bookId);
     res.json({ ok: true, note: 'Challenges cleared; call generate again.' });
@@ -330,6 +491,90 @@ export function createApiRouter(): Router {
 
   // --- Score submission (quest completion) -------------------------------------------
 
+  /**
+   * Shared quest settlement: writes the score row, applies the coin delta, and
+   * updates per-book progress inside ONE Postgres transaction so the score and
+   * the balance can never desync (any failure rolls both back).
+   *
+   * `netCoins` is what actually reaches the balance:
+   *   success → the full coin award from the scoring formula;
+   *   fail    → max(0, coinsGathered − penalty) — banked coins are never touched.
+   */
+  async function settleQuest(user: UserRow, chapter: ChapterRow, opts: {
+    mistakes: number; timeSeconds: number; finished: boolean; livesRemaining: number;
+    term: string; coinsGathered: number; failReason: 'out_of_lives' | 'out_of_time' | null;
+    bestStreak: number;
+  }) {
+    const guild = await resolveUserGuild(user);
+    const ts = resolveTermSettings(opts.term, guild?.termSettings ?? null);
+    const weights: ScoreWeights = ts.scoreWeights ?? DEFAULT_SCORE_WEIGHTS;
+
+    // The existing scoring formula, unchanged — the fail path feeds it a
+    // not-finished (and out-of-life) run so its own penalties apply.
+    const result = computeScore(
+      { mistakes: opts.mistakes, timeSeconds: opts.timeSeconds, finished: opts.finished, livesRemaining: opts.livesRemaining, outOfLife: opts.failReason === 'out_of_lives' },
+      weights,
+    );
+    const scaled = Math.round(result.rawScore * (ts.pointsMultiplier ?? 1));
+
+    let coinsAwarded: number;
+    let coinsPenalty = 0;
+    let netCoins: number;
+    if (opts.failReason === null) {
+      coinsAwarded = result.coins;
+      netCoins = coinsAwarded;
+    } else {
+      // Random penalty against ONLY the coins gathered this run.
+      const base = Math.max(0, opts.coinsGathered);
+      const frac = FAIL_PENALTY_MIN_PCT + Math.random() * (FAIL_PENALTY_MAX_PCT - FAIL_PENALTY_MIN_PCT);
+      coinsPenalty = base > 0 ? Math.min(base, Math.max(1, Math.round(base * frac))) : 0;
+      netCoins = Math.max(0, base - coinsPenalty);
+      coinsAwarded = 0;
+    }
+
+    const { scoreRow, newCoins } = await withTransaction(async (tx) => {
+      const scoreRow = await insertScoreTx(tx, {
+        userId: user.id, chapterId: chapter.id, rawScore: scaled, mistakes: opts.mistakes,
+        timeSeconds: opts.timeSeconds, finished: opts.finished, livesRemaining: opts.livesRemaining,
+        term: opts.term, coinsAwarded, coinsGathered: opts.coinsGathered, coinsPenalty, netCoins,
+        failReason: opts.failReason,
+      });
+      const newCoins = await applyCoinsTx(tx, user.id, netCoins);
+      const bookProgress = await getProgress(user.id, chapter.bookId);
+      // Only a finished quest completes the chapter (and unlocks the next);
+      // failed runs still add their score to the book's tally.
+      const completed = opts.failReason === null && !bookProgress.completedChapters.includes(chapter.id)
+        ? [...bookProgress.completedChapters, chapter.id]
+        : bookProgress.completedChapters;
+      await upsertProgressTx(tx, user.id, chapter.bookId, {
+        completedChapters: completed,
+        score: bookProgress.score + scaled,
+        bestStreak: Math.max(bookProgress.bestStreak, opts.bestStreak),
+      });
+      return { scoreRow, newCoins };
+    });
+
+    // Fail-event log (score, gathered, penalty, net) — feed for a future
+    // teacher guild-roster report.
+    console.log('[questSettle]', JSON.stringify({
+      userId: user.id, chapterId: chapter.id, term: opts.term,
+      outcome: opts.failReason ?? 'completed', score: scaled,
+      coinsGathered: opts.coinsGathered, coinsPenalty, netCoins, balance: newCoins,
+    }));
+
+    return {
+      scoreId: scoreRow.id,
+      rawScore: scaled,
+      coinsAwarded,
+      coinsPenalty,
+      netCoins,
+      coins: newCoins,
+      breakdown: result.breakdown,
+      rank: rankForScore(await getTermScore(user.id, opts.term)),
+      term: opts.term,
+    };
+  }
+
   router.post('/quests/:chapterId/complete', requireRole('student'), async (req, res) => {
     try {
       const chapterId = String(req.params.chapterId);
@@ -340,46 +585,28 @@ export function createApiRouter(): Router {
       if (!user) return res.status(401).json({ error: 'User not found' });
 
       const body = req.body ?? {};
-      const mistakes = Math.max(0, Math.floor(Number(body.mistakes) || 0));
-      const timeSeconds = Math.max(0, Math.floor(Number(body.timeSeconds) || 0));
       const finished = body.finished !== false;
-      const livesRemaining = Math.max(0, Math.min(3, Math.floor(Number(body.livesRemaining) || 0)));
       const outOfLife = body.outOfLife === true;
-      const term = typeof body.term === 'string' && TERMS.includes(body.term) ? body.term : 'prelims';
 
-      const guild = user.guildId ? await getGuild(user.guildId) : null;
-      const ts = resolveTermSettings(term, guild?.termSettings ?? null);
-      const weights: ScoreWeights = ts.scoreWeights ?? DEFAULT_SCORE_WEIGHTS;
-
-      const result = computeScore({ mistakes, timeSeconds, finished, livesRemaining, outOfLife }, weights);
-      const scaled = Math.round(result.rawScore * (ts.pointsMultiplier ?? 1));
-      const coins = result.coins;
-
-      const scoreRow = await insertScore({
-        userId: user.id, chapterId, rawScore: scaled, mistakes, timeSeconds,
-        finished, livesRemaining, term, coinsAwarded: coins,
-      });
-      const newCoins = await addCoins(user.id, coins);
-
-      // Also update per-book progress (score accumulates).
-      const bookProgress = await getProgress(user.id, chapter.bookId);
-      const completed = bookProgress.completedChapters.includes(chapterId)
-        ? bookProgress.completedChapters
-        : [...bookProgress.completedChapters, chapterId];
-      await upsertProgress(user.id, chapter.bookId, {
-        completedChapters: completed,
-        score: bookProgress.score + scaled,
-        bestStreak: Math.max(bookProgress.bestStreak, Math.floor(Number(body.bestStreak) || 0)),
+      const r = await settleQuest(user, chapter, {
+        mistakes: Math.max(0, Math.floor(Number(body.mistakes) || 0)),
+        timeSeconds: Math.max(0, Math.floor(Number(body.timeSeconds) || 0)),
+        finished,
+        livesRemaining: Math.max(0, Math.min(3, Math.floor(Number(body.livesRemaining) || 0))),
+        term: typeof body.term === 'string' && TERMS.includes(body.term) ? body.term : 'prelims',
+        coinsGathered: Math.max(0, Math.floor(Number(body.coinsGathered) || 0)),
+        bestStreak: Math.floor(Number(body.bestStreak) || 0),
+        failReason: finished ? null : (outOfLife ? 'out_of_lives' : 'out_of_time'),
       });
 
       res.json({
-        scoreId: scoreRow.id,
-        rawScore: scaled,
-        coinsAwarded: coins,
-        coins: newCoins,
-        breakdown: result.breakdown,
-        rank: rankForScore(await getTermScore(user.id, term)),
-        term,
+        scoreId: r.scoreId,
+        rawScore: r.rawScore,
+        coinsAwarded: r.netCoins,
+        coins: r.coins,
+        breakdown: r.breakdown,
+        rank: r.rank,
+        term: r.term,
       });
     } catch (e: any) {
       console.error('[questComplete]', e);
@@ -387,9 +614,55 @@ export function createApiRouter(): Router {
     }
   });
 
+  /**
+   * Quest FAILED — out of lives or out of time. Scored via the same formula
+   * (unfinished + out-of-life penalties apply), then a random coin penalty is
+   * taken against only the coins gathered during the run. Banked coins are
+   * never touched: the balance receives max(0, gathered − penalty).
+   */
+  router.post('/quests/:chapterId/fail', requireRole('student'), async (req, res) => {
+    try {
+      const chapterId = String(req.params.chapterId);
+      const chapter = await getChapter(chapterId);
+      if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
+
+      const user = await getUserById(req.user!.id);
+      if (!user) return res.status(401).json({ error: 'User not found' });
+
+      const body = req.body ?? {};
+      const reason = body.reason === 'out_of_time' ? 'out_of_time' : 'out_of_lives';
+
+      const r = await settleQuest(user, chapter, {
+        mistakes: Math.max(0, Math.floor(Number(body.mistakes) || 0)),
+        timeSeconds: Math.max(0, Math.floor(Number(body.timeSeconds) || 0)),
+        finished: false,
+        livesRemaining: reason === 'out_of_lives' ? 0 : Math.max(0, Math.min(3, Math.floor(Number(body.livesRemaining) || 0))),
+        term: typeof body.term === 'string' && TERMS.includes(body.term) ? body.term : 'prelims',
+        coinsGathered: Math.max(0, Math.floor(Number(body.coinsGathered) || 0)),
+        bestStreak: Math.floor(Number(body.bestStreak) || 0),
+        failReason: reason,
+      });
+
+      res.json({
+        scoreId: r.scoreId,
+        rawScore: r.rawScore,
+        coinsAwarded: r.netCoins,
+        coinsPenalty: r.coinsPenalty,
+        coins: r.coins,
+        breakdown: r.breakdown,
+        rank: r.rank,
+        term: r.term,
+      });
+    } catch (e: any) {
+      console.error('[questFail]', e);
+      res.status(500).json({ error: 'Could not record quest failure' });
+    }
+  });
+
   // --- Leaderboard --------------------------------------------------------------------
 
   router.get('/leaderboard', requireAuth, async (req, res) => {
+    if (await isFeatureLocked('leaderboard')) return res.status(423).json({ error: 'locked', feature: 'leaderboard' });
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(401).json({ error: 'User not found' });
     const termParam = typeof req.query.term === 'string' ? req.query.term : null;
@@ -410,7 +683,7 @@ export function createApiRouter(): Router {
     res.json({
       scope: guildId ? 'guild' : 'global',
       term,
-      entries,
+      entries: entries.map((e) => ({ ...e, avatar: sanitizeAvatar(e.avatar) })),
     });
   });
 

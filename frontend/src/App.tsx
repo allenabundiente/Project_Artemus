@@ -4,6 +4,7 @@ import type { AuthUser, GuildInfo } from './types';
 import AuthScreen from './components/AuthScreen';
 import StudentDashboard from './components/StudentDashboard';
 import TeacherDashboard from './components/TeacherDashboard';
+import AdminPanel from './components/AdminPanel';
 
 export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -11,6 +12,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [crtOn, setCrtOn] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   const refreshUser = useCallback(async () => {
     if (!api.getToken()) {
@@ -78,10 +80,19 @@ export default function App() {
       </div>
       {error && <p className="error-text" style={{ textAlign: 'center' }}>{error}</p>}
 
-      {user.role === 'teacher' ? (
+      {showAdmin && user.role === 'admin' ? (
+        <AdminPanel onExit={() => setShowAdmin(false)} />
+      ) : user.role === 'teacher' ? (
         <TeacherDashboard user={user} guild={guild} onRefreshUser={refreshUser} onSignOut={signOut} />
       ) : (
-        <StudentDashboard user={user} guild={guild} onUserUpdated={setUser} onSignOut={signOut} />
+        <StudentDashboard
+          user={user}
+          guild={guild}
+          onUserUpdated={setUser}
+          onSignOut={signOut}
+          isAdmin={user.role === 'admin'}
+          onToggleAdmin={() => setShowAdmin((v) => !v)}
+        />
       )}
     </div>
   );

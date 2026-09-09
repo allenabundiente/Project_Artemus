@@ -4,25 +4,35 @@ import type { AuthUser, BookDetail, BookMeta, GuildInfo, Progress, Term } from '
 import { spriteDataUrl } from '../game/sprites';
 import { rankForScore } from '../game/ranks';
 import RankBadge from './RankBadge';
+import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import WorldMap from './WorldMap';
 import LevelScreen from './LevelScreen';
+import LessonScreen from './LessonScreen';
 import Leaderboard from './Leaderboard';
+import Shop from './Shop';
+import Wardrobe from './Wardrobe';
+import RoyalGate from './RoyalGate';
 
 interface Props {
   user: AuthUser;
   guild: GuildInfo | null;
   onUserUpdated: (user: AuthUser) => void;
   onSignOut: () => void;
+  /** Admins get a crown button toggling the royal panel. */
+  isAdmin?: boolean;
+  onToggleAdmin?: () => void;
 }
 
 type View =
   | { name: 'home' }
   | { name: 'map'; bookId: string }
+  | { name: 'lesson'; bookId: string; chapterId: string; chapterIdx: number }
   | { name: 'level'; bookId: string; chapterId: string; chapterIdx: number }
   | { name: 'leaderboard' }
-  | { name: 'shop' };
+  | { name: 'shop' }
+  | { name: 'wardrobe' };
 
-export default function StudentDashboard({ user: userProp, guild, onUserUpdated, onSignOut }: Props) {
+export default function StudentDashboard({ user: userProp, guild, onUserUpdated, onSignOut, isAdmin, onToggleAdmin }: Props) {
   // Derive the current rank from all-time score for badge display.
   const [user, setUser] = useState<AuthUser>(userProp);
   useEffect(() => setUser(userProp), [userProp]);
@@ -40,6 +50,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   const [book, setBook] = useState<BookDetail | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [passcode, setPasscode] = useState('');
+  const [guildCode, setGuildCode] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -54,9 +65,35 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
     }
   }, []);
 
+  // The wardrobe's locked-set rows deep-link into the shop.
+  useEffect(() => {
+    const go = () => setView({ name: 'shop' });
+    window.addEventListener('arcade:goto-shop', go);
+    return () => window.removeEventListener('arcade:goto-shop', go);
+  }, []);
+
   useEffect(() => {
     if (view.name === 'home') void refreshBooks();
   }, [view, refreshBooks]);
+
+  // Admins route through this dashboard and *lead* the guild — pull its code.
+  const leads = user.role === 'admin' && !!guild;
+  useEffect(() => {
+    if (leads) {
+      api.getMyGuild().then((r) => setGuildCode(r.guild?.passcode ?? '')).catch(() => setGuildCode(''));
+    }
+  }, [leads]);
+
+  async function handleRegenerateCode() {
+    if (!window.confirm('Regenerate the guild code? The old one stops working immediately.')) return;
+    try {
+      const res = await api.regeneratePasscode();
+      setGuildCode(res.passcode);
+      setNotice(`New guild code: ${res.passcode}`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   const openBook = useCallback(async (bookId: string) => {
     setError(null);
@@ -116,6 +153,8 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
 
   const onQuestComplete = useCallback(
     async (chapterId: string, result: { rawScore: number; coinsAwarded: number; coins: number; rank: string }) => {
+      // result.coins is the server-confirmed balance AFTER the transaction
+      // committed — always reconcile to it rather than doing local math.
       onUserUpdated({ ...user, coins: result.coins });
       if (book) {
         setProgress(await api.getProgress(book.id));
@@ -126,10 +165,25 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
     [book, user, onUserUpdated]
   );
 
+  // A failed quest settled server-side: sync the (possibly reduced) balance and
+  // refresh progress in the background. Do NOT navigate — the Game Over popup
+  // lives inside LevelScreen and must stay visible until the player picks
+  // retry or kingdom map.
+  const onQuestFailSettled = useCallback(
+    (chapterId: string, result: { coins: number; rawScore: number }) => {
+      onUserUpdated({ ...user, coins: result.coins });
+      if (book) {
+        void api.getProgress(book.id).then(setProgress).catch(() => { /* stale progress is fine */ });
+      }
+    },
+    [book, user, onUserUpdated]
+  );
+
   return (
     <div style={{ minHeight: '100vh', padding: '1.5rem', position: 'relative' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <div className="hud">
+          <AvatarSprite avatar={user.avatar ?? DEFAULT_AVATAR} size={28} title={`${user.name}'s heraldic avatar`} />
           <span>⚔ {user.name}</span>
           <RankBadge rank={rank} />
           <span className="coin-count">
@@ -140,6 +194,9 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {view.name !== 'home' && <button className="pixel-btn pixel-btn--ghost" onClick={() => setView({ name: 'home' })}>◀ HALL</button>}
+          {isAdmin && (
+            <button className="pixel-btn pixel-btn--ghost" onClick={onToggleAdmin} title="Royal admin panel">👑</button>
+          )}
           <button className="pixel-btn pixel-btn--ghost" onClick={onSignOut}>SIGN OUT</button>
         </div>
       </div>
@@ -149,6 +206,35 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
 
       {view.name === 'home' && (
         <>
+          {leads && (
+            <>
+              <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
+                <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>⚔ UPLOAD A QUEST FOR YOUR ADVENTURERS</p>
+                <p className="term-font" style={{ fontSize: '1rem', margin: '0 0 0.6rem', color: 'var(--d-stone-light)' }}>
+                  Drop in a PDF tome — it becomes monsters for {guild?.name ?? 'your guild'} instantly.
+                </p>
+                <select className="pixel-select" value={term} onChange={(e) => setTerm(e.target.value as Term)} style={{ marginRight: '0.4rem' }}>
+                  {(['prelims', 'midterms', 'semis', 'finals'] as Term[]).map((t) => (
+                    <option key={t} value={t}>{t.toUpperCase()}</option>
+                  ))}
+                </select>
+                <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>
+                  {busy ?? 'UPLOAD QUEST (PDF)'}
+                </button>
+              </div>
+
+              <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
+                <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>🔑 GUILD CODE</p>
+                <p className="term-font" style={{ fontSize: '1.15rem', margin: '0.2rem 0 0.6rem' }}>
+                  Adventurers join with: <strong style={{ color: 'var(--d-gold)', fontSize: '1.5rem', letterSpacing: '0.2em' }}>{guildCode || '…'}</strong>
+                </p>
+                <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem' }} onClick={handleRegenerateCode}>
+                  REGENERATE GUILD CODE
+                </button>
+              </div>
+            </>
+          )}
+
           {!guild && (
             <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
               <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>CHOOSE YOUR PATH</p>
@@ -199,7 +285,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
             </div>
           )}
 
-          {guild && (
+          {guild && !leads && (
             <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
               <div>
                 <p className="pixel-font" style={{ fontSize: '0.8rem', margin: 0 }}>🏰 {guild.name}</p>
@@ -217,7 +303,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
             <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>📜 QUEST TOMES</p>
             {books.length === 0 && (
               <p className="status-text" style={{ margin: 0 }}>
-                {guild ? 'Your teacher has not uploaded any tomes yet.' : 'Upload a tome above to begin your quest.'}
+                {guild ? (leads ? 'No quests yet — upload a PDF above to arm your adventurers.' : 'Your teacher has not uploaded any tomes yet.') : 'Upload a tome above to begin your quest.'}
               </p>
             )}
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
@@ -229,12 +315,15 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
                 </li>
               ))}
             </ul>
-            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.9rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.9rem', flexWrap: 'wrap' }}>
               <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.65rem' }} onClick={() => setView({ name: 'leaderboard' })}>
                 ⚔ LEADERBOARD
               </button>
               <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.65rem' }} onClick={() => setView({ name: 'shop' })}>
                 🪙 SHOP
+              </button>
+              <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.65rem' }} onClick={() => setView({ name: 'wardrobe' })}>
+                👤 WARDROBE
               </button>
             </div>
           </div>
@@ -246,7 +335,17 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           book={book}
           progress={progress}
           term={term}
-          onEnterLevel={(chapterId, chapterIdx) => setView({ name: 'level', bookId: book.id, chapterId, chapterIdx })}
+          onEnterLevel={(chapterId, chapterIdx) => setView({ name: 'lesson', bookId: book.id, chapterId, chapterIdx })}
+        />
+      )}
+
+      {view.name === 'lesson' && (
+        <LessonScreen
+          bookId={view.bookId}
+          chapterId={view.chapterId}
+          chapterIdx={view.chapterIdx}
+          onStart={() => setView({ name: 'level', bookId: view.bookId, chapterId: view.chapterId, chapterIdx: view.chapterIdx })}
+          onBack={() => setView({ name: 'map', bookId: view.bookId })}
         />
       )}
 
@@ -256,8 +355,10 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           chapterId={view.chapterId}
           chapterIdx={view.chapterIdx}
           term={term}
+          avatar={user.avatar}
           onExit={() => setView({ name: 'map', bookId: view.bookId })}
           onComplete={onQuestComplete}
+          onFailSettled={onQuestFailSettled}
         />
       )}
 
@@ -266,15 +367,15 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       )}
 
       {view.name === 'shop' && (
-        <div style={{ maxWidth: 480, margin: '0 auto' }}>
-          <div className="pixel-panel" style={{ textAlign: 'center' }}>
-            <p className="pixel-font" style={{ fontSize: '1rem', color: 'var(--d-gold)' }}>🪙 {user.coins} COINS</p>
-            <p className="pixel-font" style={{ fontSize: '0.9rem' }}>SHOP COMING SOON</p>
-            <p className="term-font" style={{ color: 'var(--d-stone-light)' }}>
-              Hints and cosmetics arrive in a future update. Your coins are safe — they never reset between terms.
-            </p>
-          </div>
-        </div>
+        <RoyalGate feature="shop">
+          <Shop user={user} onUserUpdated={onUserUpdated} />
+        </RoyalGate>
+      )}
+
+      {view.name === 'wardrobe' && (
+        <RoyalGate feature="wardrobe">
+          <Wardrobe initial={user.avatar ?? DEFAULT_AVATAR} onSaved={(avatar) => onUserUpdated({ ...user, avatar })} />
+        </RoyalGate>
       )}
     </div>
   );

@@ -3,6 +3,9 @@ import * as api from '../api';
 import type { AuthUser, BookMeta, RosterEntry, Term, TermSettings } from '../types';
 import GuildSettings from './GuildSettings';
 import Leaderboard from './Leaderboard';
+import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
+import Wardrobe from './Wardrobe';
+import RoyalGate from './RoyalGate';
 
 interface Props {
   user: AuthUser;
@@ -11,7 +14,7 @@ interface Props {
   onSignOut: () => void;
 }
 
-type View = 'home' | 'settings' | 'leaderboard';
+type View = 'home' | 'settings' | 'leaderboard' | 'wardrobe';
 
 export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut }: Props) {
   const [view, setView] = useState<View>('home');
@@ -78,7 +81,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       const up = await api.uploadPdf(file);
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
-      setNotice(`"${up.title}" assigned to the guild — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
+      setNotice(`"${up.title}" is ready for your adventurers — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -91,11 +94,15 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     <div style={{ minHeight: '100vh', padding: '1.5rem', position: 'relative' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <div className="hud">
+          <AvatarSprite avatar={user.avatar ?? DEFAULT_AVATAR} size={28} title={`${user.name}'s heraldic avatar`} />
           <span>🏰 {user.name}</span>
           {guild && <span className="label">GUILD MASTER of {guild.name}</span>}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {view !== 'home' && <button className="pixel-btn pixel-btn--ghost" onClick={() => setView('home')}>◀ HALL</button>}
+          <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.65rem' }} onClick={() => setView('wardrobe')} title="Customize your heraldic look">
+            👤 WARDROBE
+          </button>
           <button className="pixel-btn pixel-btn--ghost" onClick={onSignOut}>SIGN OUT</button>
         </div>
       </div>
@@ -123,11 +130,11 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
               <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
                 <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>🏰 {guild.name.toUpperCase()}</p>
                 <p className="term-font" style={{ fontSize: '1.15rem', margin: '0.2rem 0 0.6rem' }}>
-                  Student passcode: <strong style={{ color: 'var(--d-gold)', fontSize: '1.5rem', letterSpacing: '0.2em' }}>{passcode}</strong>
+                  Guild code: <strong style={{ color: 'var(--d-gold)', fontSize: '1.5rem', letterSpacing: '0.2em' }}>{passcode}</strong>
                 </p>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem' }} onClick={handleRegeneratePasscode}>
-                    REGENERATE PASSCODE
+                    REGENERATE GUILD CODE
                   </button>
                   <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.6rem' }} onClick={() => setView('settings')}>
                     ⚙ GUILD SETTINGS
@@ -139,7 +146,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
               </div>
 
               <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
-                <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>📜 ASSIGN A TOME (PDF)</p>
+                <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>⚔ UPLOAD A QUEST FOR YOUR ADVENTURERS</p>
                 <input
                   ref={fileRef}
                   type="file"
@@ -157,7 +164,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                   ))}
                 </select>
                 <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>
-                  {busy ?? 'UPLOAD & ASSIGN'}
+                  {busy ?? 'UPLOAD QUEST (PDF)'}
                 </button>
                 <p className="term-font" style={{ color: 'var(--d-stone-light)', marginBottom: 0, marginTop: '0.5rem' }}>
                   Monsters are generated using the selected term's difficulty settings.
@@ -169,6 +176,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                 {roster.length === 0 && <p className="status-text" style={{ margin: 0 }}>No students have joined yet — share the passcode.</p>}
                 {roster.map((m) => (
                   <div key={m.id} className="leaderboard-row">
+                    <AvatarSprite avatar={m.avatar ?? DEFAULT_AVATAR} size={26} title={`${m.name}'s heraldic avatar`} />
                     <span className="term-font" style={{ fontSize: '1.15rem', flex: 1 }}>{m.name}</span>
                     <span className="pixel-font" style={{ fontSize: '0.6rem', color: 'var(--d-stone-light)' }}>
                       last active {new Date(m.lastActive).toLocaleDateString()}
@@ -196,6 +204,12 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
 
       {view === 'leaderboard' && guild && (
         <Leaderboard userRole="teacher" userGuildId={guild.id} currentUserId={user.id} />
+      )}
+
+      {view === 'wardrobe' && (
+        <RoyalGate feature="wardrobe">
+          <Wardrobe initial={user.avatar ?? DEFAULT_AVATAR} onSaved={async (avatar) => { await onRefreshUser(); setNotice('Look saved! Your heraldry rides with you.'); void avatar; }} />
+        </RoyalGate>
       )}
     </div>
   );

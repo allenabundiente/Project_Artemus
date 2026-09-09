@@ -1,5 +1,7 @@
 import type { Challenge } from '../types';
 import { sfx } from './sfx';
+import { resolveTheme, type Theme } from './themes';
+import { composeAvatar, type AvatarConfig, type AvatarFrame } from './avatar';
 
 export const VIRTUAL_W = 320;
 export const VIRTUAL_H = 180;
@@ -58,6 +60,10 @@ export class ArcadeEngine {
   private ctx: CanvasRenderingContext2D;
   private layout: LevelLayout;
   private sprites: Record<string, HTMLImageElement>;
+  private theme: Theme;
+  /** Player customization (wardrobe); undefined = classic hero sprite. */
+  private avatar?: AvatarConfig;
+  private monsterSprites: string[];
   private cb: EngineCallbacks;
 
   private px = 60;
@@ -77,6 +83,8 @@ export class ArcadeEngine {
   private lives = 3;
   private score = 0;
   private checkpointX = 60;
+  /** Coins picked up this run — the only pool a fail penalty may draw from. */
+  private coinsCollected = 0;
 
   private collected: Set<number> = new Set();
   private defeated: Set<number> = new Set();
@@ -89,12 +97,29 @@ export class ArcadeEngine {
 
   private keys: Set<string> = new Set();
 
-  constructor(canvas: HTMLCanvasElement, layout: LevelLayout, sprites: Record<string, HTMLImageElement>, cb: EngineCallbacks) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    layout: LevelLayout,
+    sprites: Record<string, HTMLImageElement>,
+    cb: EngineCallbacks,
+    themeId?: string,
+    avatar?: AvatarConfig,
+  ) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
     this.layout = layout;
-    this.sprites = sprites;
     this.cb = cb;
+    this.theme = resolveTheme(themeId);
+    // Apply the theme's sprite overrides, then keep every other slot from the
+    // preloaded manifest sprites.
+    const merged: Record<string, HTMLImageElement> = { ...sprites };
+    for (const [slot, file] of Object.entries(this.theme.spriteOverrides ?? {})) {
+      const img = sprites[file] ?? sprites[slot];
+      if (img) merged[slot] = img;
+    }
+    this.sprites = merged;
+    this.monsterSprites = this.theme.monsters ?? ['enemy_goblin', 'enemy_slime', 'enemy_bat'];
+    this.avatar = avatar;
     this.py = layout.groundY - PLAYER_H;
     this.bugDirs = layout.monsters.map(() => (Math.random() < 0.5 ? 1 : -1) as 1 | -1);
   }
@@ -137,6 +162,11 @@ export class ArcadeEngine {
     this.cb.onStateChange({ lives: this.lives, score: this.score });
   }
 
+  /** Coins gathered during the current run (for the fail-penalty accounting). */
+  getCoinsCollected(): number {
+    return this.coinsCollected;
+  }
+
   /** Player takes one damage (wrong answer in battle, pit, etc.). */
   damage(): void {
     this.hitPlayer();
@@ -147,6 +177,7 @@ export class ArcadeEngine {
     this.lives = 3;
     this.score = 0;
     this.checkpointX = 60;
+    this.coinsCollected = 0;
     this.px = 60;
     this.py = this.layout.groundY - PLAYER_H;
     this.vy = 0;
@@ -168,8 +199,8 @@ export class ArcadeEngine {
     const m = this.layout.monsters[i];
     if (m) {
       this.checkpointX = Math.max(this.checkpointX, m.x + 10);
-      this.burst(m.x, this.layout.groundY - 14, 16, '#00e436');
-      this.burst(m.x, this.layout.groundY - 14, 10, '#ffec27');
+      this.burst(m.x, this.layout.groundY - 14, 16, this.theme.particleHit ?? '#00e436');
+      this.burst(m.x, this.layout.groundY - 14, 10, this.theme.particleScore ?? '#ffec27');
     }
     this.addScore(50);
     this.pendingMonster = null;
@@ -186,21 +217,33 @@ export class ArcadeEngine {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code ?? e.key)) {
-      e.preventDefault();
+    // Only capture game keys while the level is actively playing; while a
+    // dialog (challenge, battle, results) is open the player may be typing —
+    // swallow nothing so text input (including spaces) works normally.
+    if (!this.paused) {
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code ?? e.key)) {
+        e.preventDefault();
+      }
+      this.keys.add(e.code ?? e.key);
     }
-    this.keys.add(e.code ?? e.key);
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
     this.keys.delete(e.code ?? e.key);
+    // A dialog opening mid-jump can leave jump stuck on; drop W/ArrowUp on any
+    // keyup while paused so the knight doesn't keep bouncing afterward.
+    if (this.paused && (e.code === 'KeyW' || e.code === 'ArrowUp')) {
+      this.keys.delete('KeyW');
+      this.keys.delete('ArrowUp');
+    }
   };
 
   private get input(): { left: boolean; right: boolean; jump: boolean } {
     const k = this.keys;
     const left = k.has('ArrowLeft') || k.has('KeyA');
     const right = k.has('ArrowRight') || k.has('KeyD');
-    const jump = k.has('Space') || k.has('ArrowUp') || k.has('KeyW');
+    // Jump is W only — Space is reserved for typing in the answer input.
+    const jump = k.has('KeyW') || k.has('ArrowUp');
     return { left, right, jump };
   }
 
@@ -273,8 +316,9 @@ export class ArcadeEngine {
       const c = this.layout.coins[i];
       if (Math.abs(c.x - playerCx) < 12 && Math.abs(c.y - playerCy) < 12) {
         this.collected.add(i);
+        this.coinsCollected += 1;
         this.addScore(10);
-        this.burst(c.x, c.y, 6, '#ffec27');
+        this.burst(c.x, c.y, 6, this.theme.particleScore ?? '#ffec27');
         sfx.coin();
       }
     }
@@ -335,6 +379,7 @@ export class ArcadeEngine {
   }
 
   private hitPlayer(): void {
+    if (this.levelDone) return; // already dead — a same-tick burst must not re-kill
     this.lives--;
     this.cb.onStateChange({ lives: this.lives, score: this.score });
     sfx.hit();
@@ -390,27 +435,28 @@ export class ArcadeEngine {
 
   private render(): void {
     const c = this.ctx;
-    // dungeon night sky
-    c.fillStyle = '#2a1f2e';
+    const th = this.theme;
+    // sky
+    c.fillStyle = th.sky;
     c.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
 
-    // stars
-    c.fillStyle = '#f2e8d5';
+    // stars / fireflies
+    c.fillStyle = th.stars;
     for (let i = 0; i < 40; i++) {
       const sx = (i * 137.5 + Math.floor(this.camX * 0.1)) % VIRTUAL_W;
       const sy = (i * 53.7) % 70;
       c.fillRect(Math.floor(sx), Math.floor(sy), 1, 1);
     }
 
-    // parallax: distant castle silhouettes, then dark forest
-    c.fillStyle = '#4f2a25';
+    // parallax: distant silhouettes, then near layer
+    c.fillStyle = th.farHills;
     for (let i = -1; i < 3; i++) {
       const hx = i * 200 - ((this.camX * 0.35) % 200);
       c.fillRect(Math.floor(hx), 110, 200, 70);
       // battlements
       for (let bx = 0; bx < 5; bx++) c.fillRect(Math.floor(hx + 20 + bx * 36), 102, 16, 8);
     }
-    c.fillStyle = '#3f5d3a';
+    c.fillStyle = th.nearHills;
     for (let i = -1; i < 3; i++) {
       const hx = i * 160 - ((this.camX * 0.6) % 160);
       c.fillRect(Math.floor(hx), 128, 160, 52);
@@ -421,17 +467,17 @@ export class ArcadeEngine {
     const groundTop = this.layout.groundY;
 
     // pits
-    c.fillStyle = '#000000';
+    c.fillStyle = th.pit;
     for (const pit of this.layout.pits) {
       c.fillRect(Math.round(pit.x - this.camX), groundTop, pit.w, this.layout.groundH);
     }
 
-    // stone floor
-    c.fillStyle = '#8b5a2b';
+    // floor
+    c.fillStyle = th.floorTop;
     c.fillRect(0, groundTop, VIRTUAL_W, 4);
-    c.fillStyle = '#5c554e';
+    c.fillStyle = th.floorBody;
     c.fillRect(0, groundTop + 4, VIRTUAL_W, this.layout.groundH - 4);
-    c.fillStyle = '#706a62';
+    c.fillStyle = th.floorSpeckle;
     for (let i = 0; i < 30; i++) {
       const gx = (i * 47 + Math.floor(this.camX * 0.9)) % VIRTUAL_W;
       const gy = groundTop + 8 + (i * 13) % (this.layout.groundH - 12);
@@ -452,35 +498,42 @@ export class ArcadeEngine {
       c.fillRect(x + 1, y + 2, 2, 6);
     }
 
-    // monsters (goblins/slime/bats by index) with hp pips, gentle bob
-    const monsterSprites = ['enemy_goblin', 'enemy_slime', 'enemy_bat'];
+    // monsters (theme's patrol roster, cycling by index) with hp pips, gentle bob
     for (let i = 0; i < this.layout.monsters.length; i++) {
       if (this.defeated.has(i)) continue;
       const m = this.layout.monsters[i];
       const bob = Math.round(Math.sin(this.time * 3 + i) * 2);
       const mx = Math.round(m.x - 8 - this.camX);
       const my = groundTop - 16 + bob;
-      this.drawSprite(monsterSprites[i % monsterSprites.length], mx, my);
+      this.drawSprite(this.monsterSprites[i % this.monsterSprites.length], mx, my);
       // hp pips
       for (let h = 0; h < m.maxHp; h++) {
-        c.fillStyle = h < m.hp - 0 ? '#a82a2a' : '#5c554e';
+        c.fillStyle = h < m.hp - 0 ? th.hpFilled : th.hpEmpty;
         c.fillRect(mx + 2 + h * 5, my - 4, 3, 2);
       }
     }
 
-    // wall torches every ~200px of world space
+    // standing torches every ~220px of world space: a pole planted in the
+    // floor with a base and sconce cup, flame on top (sprite when available,
+    // drawn flame otherwise). The old code drew only the flame, which hovered
+    // in mid-air 64px above the floor.
     for (let tx = 160; tx < this.layout.width; tx += 220) {
-      const sx = tx - this.camX;
+      const sx = Math.round(tx - this.camX);
       if (sx > -12 && sx < VIRTUAL_W) {
         const flicker = Math.sin(this.time * 9 + tx) * 1.5;
+        // pole from the floor up to just under the flame, plus a small base
+        c.fillStyle = th.torchPole ?? '#4a2f16';
+        c.fillRect(sx + 5, groundTop - 63, 2, 63);
+        c.fillRect(sx + 3, groundTop - 4, 6, 4);
+        // sconce cup under the flame
+        c.fillStyle = th.torchSconce ?? '#3a2c22';
+        c.fillRect(sx + 3, groundTop - 66, 6, 3);
         const img = this.sprites['torch'];
         if (img && img.complete) {
-          this.ctx.drawImage(img, Math.round(sx), Math.round(groundTop - 74 + flicker * 0.3));
+          this.ctx.drawImage(img, sx, Math.round(groundTop - 74 + flicker * 0.3));
         } else {
-          c.fillStyle = '#8b5a2b';
-          c.fillRect(Math.round(sx) + 4, Math.round(groundTop - 68), 3, 14);
           c.fillStyle = '#ffa13d';
-          c.fillRect(Math.round(sx) + 3, Math.round(groundTop - 74 + flicker), 5, 6);
+          c.fillRect(sx + 3, Math.round(groundTop - 74 + flicker), 5, 6);
         }
       }
     }
@@ -488,10 +541,16 @@ export class ArcadeEngine {
     // castle gate (quest end)
     this.drawSprite('castle_gate', this.layout.flagX - this.camX, groundTop - 24);
 
-    // player
+    // player — wardrobe-composited avatar when configured, classic hero otherwise
     if (this.invuln <= 0 || Math.floor(this.time * 12) % 2 === 0) {
-      const frame = !this.onGround ? 'player_jump' : this.animState();
-      this.drawSprite(frame, this.px - this.camX, this.py);
+      const animFrame: AvatarFrame = !this.onGround ? 'jump' : !this.input.left && !this.input.right ? 'idle' : Math.floor(this.animT * 8) % 2 === 0 ? 'run1' : 'run2';
+      if (this.avatar) {
+        const composed = composeAvatar(animFrame, this.avatar, this.sprites);
+        c.drawImage(composed, Math.round(this.px - this.camX), Math.round(this.py));
+      } else {
+        const frame = !this.onGround ? 'player_jump' : this.animState();
+        this.drawSprite(frame, this.px - this.camX, this.py);
+      }
     }
 
     // particles

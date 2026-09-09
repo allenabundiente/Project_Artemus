@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { SPRITES, renderGrid } from '../src/game/spriteGrids.js';
+import { AVATAR_GRIDS } from '../src/game/avatarGrids.js';
 
 // --- minimal PNG encoder ----------------------------------------------------
 
@@ -58,13 +59,25 @@ function encodePng(width: number, height: number, rgba: Uint8Array): Uint8Array 
 
 // --- generate ---------------------------------------------------------------
 
+const allSprites = [...SPRITES, ...AVATAR_GRIDS];
 const outDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../public/sprites');
 fs.mkdirSync(outDir, { recursive: true });
 
-for (const sprite of SPRITES) {
+for (const sprite of allSprites) {
   const { width, height, rgba } = renderGrid(sprite.grid);
   const png = encodePng(width, height, rgba);
   fs.writeFileSync(path.join(outDir, `${sprite.name}.png`), png);
   console.log(`wrote ${sprite.name}.png (${width}x${height}, ${png.length}b)`);
 }
+
+// Manifest: every sprite slot the engine can use, with the grid-derived size
+// and the grid fallback flag. Hand-drawn replacements in public/sprites/ should
+// keep the SAME dimensions; add brand-new slots by appending here.
+const manifest: Record<string, { width: number; height: number; gridFallback: boolean }> = {};
+for (const sprite of allSprites) {
+  const { width, height } = renderGrid(sprite.grid);
+  manifest[sprite.name] = { width, height, gridFallback: true };
+}
+fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+console.log(`wrote manifest.json (${Object.keys(manifest).length} slots)`);
 console.log(`done -> ${outDir}`);

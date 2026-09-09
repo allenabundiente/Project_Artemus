@@ -4,6 +4,7 @@
 // spriteGrids.ts directly onto a canvas — so the game always renders.
 
 import { SPRITES, renderGrid } from './spriteGrids';
+import { AVATAR_GRIDS } from './avatarGrids';
 
 export type SpriteMap = Record<string, HTMLImageElement>;
 
@@ -13,7 +14,7 @@ const gridCache = new Map<string, string>();
 export function spriteDataUrl(name: string): string {
   const cached = gridCache.get(name);
   if (cached) return cached;
-  const def = SPRITES.find((s) => s.name === name);
+  const def = SPRITES.find((s) => s.name === name) ?? AVATAR_GRIDS.find((s) => s.name === name);
   const grid = def ? def.grid : ['..rr..', '.rrrr.', 'rrrrrr', '.rrrr.', '..rr..'];
   const { width, height, rgba } = renderGrid(grid);
   const canvas = document.createElement('canvas');
@@ -31,8 +32,9 @@ export function spriteDataUrl(name: string): string {
 /** Preload all sprites as HTMLImageElements; falls back to data URLs on error. */
 export async function loadSprites(): Promise<SpriteMap> {
   const map: SpriteMap = {};
+  const all = [...SPRITES, ...AVATAR_GRIDS];
   await Promise.all(
-    SPRITES.map(
+    all.map(
       (s) =>
         new Promise<void>((resolve) => {
           const img = new Image();

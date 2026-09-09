@@ -75,7 +75,32 @@ The old `data/arcade.db` SQLite file is no longer used.
 # One-time: create backend/.env from backend/.env.example and set:
 #   DATABASE_URL  — your Supabase connection string (Project Settings → Database)
 #   JWT_SECRET    — any long random string
-#   ANTHROPIC_API_KEY — optional, for LLM-generated challenges
+#
+# LLM challenge generation — optional, pick ONE:
+#   ANTHROPIC_API_KEY    (paid Claude, best quality), OR a free OpenAI-compatible provider:
+#   OPENAI_BASE_URL + OPENAI_API_KEY + LLM_MODEL
+#     OpenRouter (free tier):  https://openrouter.ai/api/v1  + models tagged ":free"
+#     Google Gemini (free):    https://generativelanguage.googleapis.com/v1beta/openai
+#     Groq (free tier):        https://api.groq.com/openai/v1
+#     Local Ollama ($0):       http://localhost:11434/v1
+#   See backend/.env.example for model ids. With nothing set, challenges are
+#   generated offline by heuristics.
+
+### Fully offline & free: local Ollama (one command)
+
+```bash
+bash backend/scripts/setup-ollama.sh
+# or pick another model: MODEL=llama3.2:3b bash backend/scripts/setup-ollama.sh
+```
+
+The script starts the Ollama daemon, pulls the recommended coding model
+(`qwen2.5-coder:3b`, ~1.9 GB — needs ~4 GB RAM, CPU inference is fine), writes
+the OPENAI_* lines into `backend/.env`, and smoke-tests a completion.
+Restart the backend, open the teacher dashboard's ⚙ Guild Master Settings →
+🧙 AI Challenge Smith, confirm the model shows up, and hit
+**⚒ REGENERATE ALL CHALLENGES** to re-forge every tome with the local model.
+(Note: 3B-class models are much weaker than Claude — expect simpler wording and
+occasional heuristic fallbacks; the API reports them per chapter.)
 
 # Terminal 1 — backend (port 4010)
 cd backend

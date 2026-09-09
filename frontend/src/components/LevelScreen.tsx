@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ScoreResultResponse, Term } from '../types';
+import type { AvatarPrefs, ScoreResultResponse, Term } from '../types';
 import * as api from '../api';
 import { ArcadeEngine, buildLayout } from '../game/engine';
 import { loadSprites, spriteDataUrl } from '../game/sprites';
@@ -11,19 +11,31 @@ interface Props {
   chapterId: string;
   chapterIdx: number;
   term: Term;
+  avatar?: AvatarPrefs;
   onExit: () => void;
   onComplete: (chapterId: string, result: ScoreResultResponse) => void;
+  /** Fail settled server-side — lets the dashboard sync the new coin balance. */
+  onFailSettled?: (chapterId: string, result: ScoreResultResponse) => void;
 }
 
 type Phase = 'loading' | 'playing' | 'battle' | 'boss' | 'won' | 'gameover';
 
-export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExit, onComplete }: Props) {
+/** What the Game Over popup shows once the fail has been recorded. */
+interface FailOutcome {
+  reason: 'out_of_lives' | 'out_of_time';
+  result: ScoreResultResponse;
+  coinsGathered: number;
+}
+
+export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avatar, onExit, onComplete, onFailSettled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<ArcadeEngine | null>(null);
   const challengesRef = useRef<import('../types').Challenge[]>([]);
   const streakRef = useRef(0);
   const mistakesRef = useRef(0);
   const startedAtRef = useRef<number>(Date.now());
+  const coinsRunRef = useRef(0);
+  const livesRef = useRef(3);
 
   const [phase, setPhase] = useState<Phase>('loading');
   const phaseRef = useRef<Phase>('loading');
@@ -31,11 +43,18 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
   const [battleMonster, setBattleMonster] = useState(0);
   const [battleKey, setBattleKey] = useState(0);
   const [lives, setLives] = useState(3);
+  livesRef.current = lives;
   const [score, setScore] = useState(0);
   const [streak, setStreak] = useState(0);
+  const [coinsRun, setCoinsRun] = useState(0);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Synchronous submit latch: React state (`submitting`) lags a render, so a
+  // same-tick burst (e.g. multiple game-over triggers) could double-settle.
+  const submittingRef = useRef(false);
+  const [failOutcome, setFailOutcome] = useState<FailOutcome | null>(null);
+  const [failError, setFailError] = useState<string | null>(null);
   const termSettingsRef = useRef<{ timeLimitSeconds: number } | null>(null);
 
   // --- init: load challenges + term settings, build layout, spin up engine ----
@@ -61,6 +80,12 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
         canvas.width = 320;
         canvas.height = 180;
         startedAtRef.current = Date.now();
+        // Map look: teacher's guild skin → admin config → random-by-difficulty.
+        // /?theme=<id> still wins for testing (see game/themes.ts). The player's
+        // wardrobe avatar rides along too.
+        const urlTheme = new URLSearchParams(window.location.search).get('theme');
+        const themeId = urlTheme
+          ?? await api.resolveMap(chapterId, termInfo.settings.monsterDifficulty).then((r) => r.theme).catch(() => undefined);
         const engine = new ArcadeEngine(canvas, layout, sprites, {
           onMonsterHit: (i) => {
             setBattleMonster(i);
@@ -71,12 +96,18 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
             setBattleKey((k) => k + 1);
             setPhase('boss');
           },
-          onGameOver: () => setPhase('gameover'),
+          onGameOver: () => void failQuestRef.current('out_of_lives'),
           onStateChange: (s) => {
             setLives(s.lives);
             setScore(s.score);
+            // Sync synchronously: a game-over can fire in the same tick.
+            const c = engineRef.current?.getCoinsCollected() ?? 0;
+            coinsRunRef.current = c;
+            setCoinsRun(c);
           },
-        });
+        },
+        themeId,
+        avatar ? { ...avatar } : undefined);
         engineRef.current = engine;
         setTimeLeft(termInfo.settings.timeLimitSeconds);
         setPhase('playing');
@@ -101,7 +132,8 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
   // --- countdown timer ---------------------------------------------------------
   const finishQuest = useCallback(
     async (finished: boolean, livesRemaining: number) => {
-      if (submitting) return;
+      if (submittingRef.current) return;
+      submittingRef.current = true;
       setSubmitting(true);
       const timeSeconds = Math.round((Date.now() - startedAtRef.current) / 1000);
       try {
@@ -113,28 +145,69 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
           outOfLife: !finished && livesRemaining <= 0,
           bestStreak: streakRef.current,
           term,
+          coinsGathered: coinsRunRef.current,
         });
         sfx.victory();
         onComplete(chapterId, result);
       } catch (e) {
         setError((e as Error).message);
+        submittingRef.current = false;
         setSubmitting(false);
       }
     },
-    [chapterId, term, onComplete, submitting]
+    [chapterId, term, onComplete]
   );
+
+  /**
+   * The run FAILED (out of lives / out of time): settle it server-side, then
+   * show the Game Over popup with the formula-scored result and coin penalty.
+   */
+  const failQuest = useCallback(
+    async (reason: 'out_of_lives' | 'out_of_time') => {
+      if (submittingRef.current || phaseRef.current === 'gameover') return;
+      submittingRef.current = true;
+      setPhase('gameover');
+      setFailOutcome(null);
+      setFailError(null);
+      setSubmitting(true);
+      const timeSeconds = Math.round((Date.now() - startedAtRef.current) / 1000);
+      try {
+        const result = await api.submitQuestFail(chapterId, {
+          reason,
+          mistakes: mistakesRef.current,
+          timeSeconds,
+          livesRemaining: reason === 'out_of_time' ? Math.max(0, livesRef.current) : 0,
+          bestStreak: streakRef.current,
+          term,
+          coinsGathered: coinsRunRef.current,
+        });
+        sfx.defeat();
+        setFailOutcome({ reason, result, coinsGathered: coinsRunRef.current });
+        onFailSettled?.(chapterId, result);
+      } catch (e) {
+        // Popup stays up with the score we know; a RETRY attempt will re-report.
+        setFailError((e as Error).message);
+        submittingRef.current = false;
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [chapterId, term, onFailSettled]
+  );
+  const failQuestRef = useRef(failQuest);
+  failQuestRef.current = failQuest;
 
   useEffect(() => {
     if (phase !== 'playing' && phase !== 'battle' && phase !== 'boss') return;
     if (timeLeft === null) return;
     if (timeLeft <= 0) {
-      // Timer expired — record an incomplete run.
-      void finishQuest(false, Math.max(0, lives));
+      // Timer expired — a failed run, per the guild's term settings.
+      void failQuestRef.current('out_of_time');
       return;
     }
     const t = window.setTimeout(() => setTimeLeft((s) => (s === null ? null : s - 1)), 1000);
     return () => window.clearTimeout(t);
-  }, [timeLeft, phase, finishQuest, lives]);
+  }, [timeLeft, phase]);
 
   // pause engine whenever a dialog/battle is up
   useEffect(() => {
@@ -159,7 +232,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
     (monsterIndex: number | null) => {
       if (monsterIndex === null) {
         // boss victory → quest complete
-        void finishQuest(true, Math.max(0, lives));
+        void finishQuest(true, Math.max(0, livesRef.current));
         return;
       }
       engine()?.monsterDefeated(monsterIndex);
@@ -167,15 +240,20 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
       setStreak(streakRef.current);
       setPhase('playing');
     },
-    [finishQuest, lives]
+    [finishQuest]
   );
 
   function retryLevel() {
     engine()?.resetLevel();
     streakRef.current = 0;
     mistakesRef.current = 0;
+    submittingRef.current = false;
     setStreak(0);
+    setCoinsRun(0);
+    coinsRunRef.current = 0;
     startedAtRef.current = Date.now();
+    setFailOutcome(null);
+    setFailError(null);
     setTimeLeft(termSettingsRef.current?.timeLimitSeconds ?? null);
     setPhase('playing');
   }
@@ -210,6 +288,10 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
         <span>
           <span className="label">SCORE:</span> {score}
         </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+          <img src={spriteDataUrl('coin')} alt="" style={{ width: 12, height: 12 }} />
+          <span className="label">{coinsRun}</span>
+        </span>
         <span>
           <span className="label">STREAK:</span> {streak}
         </span>
@@ -232,7 +314,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
       <canvas id="game-canvas" ref={canvasRef} />
 
       {phase === 'battle' && (
-        <div style={{ marginTop: '1rem' }}>
+        <div className="modal-overlay">
           <BattleScreen
             key={`battle-${battleKey}`}
             challenges={challengesRef.current}
@@ -246,7 +328,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
       )}
 
       {phase === 'boss' && (
-        <div style={{ marginTop: '1rem' }}>
+        <div className="modal-overlay">
           <BattleScreen
             key={`boss-${battleKey}`}
             challenges={challengesRef.current}
@@ -260,12 +342,55 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, onExi
       )}
 
       {phase === 'gameover' && (
-        <div className="dialog-box" style={{ maxWidth: 520, margin: '0 auto' }}>
-          <p className="pixel-font" style={{ color: 'var(--d-red)', fontSize: '0.8rem' }}>DEFEATED</p>
-          <p className="term-font">Out of hearts! The dungeon remembers — respawn and try again, or withdraw to record an incomplete quest.</p>
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-            <button className="pixel-btn" onClick={() => void finishQuest(false, 0)}>RECORD & WITHDRAW</button>
-            <button className="pixel-btn pixel-btn--primary" onClick={retryLevel}>CONTINUE</button>
+        <div className="modal-overlay">
+          <div className="gameover-panel">
+            <p className="gameover-title">☠ GAME OVER ☠</p>
+            <p className="gameover-sub">
+              {failOutcome?.reason === 'out_of_time'
+                ? 'The sands ran out — your time is spent.'
+                : failOutcome
+                  ? 'Your last heart was shattered…'
+                  : 'Your quest has ended in defeat…'}
+            </p>
+
+            {!failOutcome ? (
+              <p className="gameover-note">
+                {failError ?? 'Recording your defeat…'}
+              </p>
+            ) : (
+              <>
+                <div className="gameover-stats">
+                  <div className="gameover-row">
+                    <span>Quest score</span>
+                    <strong>{failOutcome.result.rawScore} pts</strong>
+                  </div>
+                  <div className="gameover-row">
+                    <span>Coins gathered</span>
+                    <strong>{failOutcome.coinsGathered} 🪙</strong>
+                  </div>
+                  <div className="gameover-row gameover-row--penalty">
+                    <span>Penalty</span>
+                    <strong>−{failOutcome.result.coinsPenalty ?? 0} 🪙</strong>
+                  </div>
+                  <div className="gameover-row gameover-row--net">
+                    <span>Banked from this run</span>
+                    <strong>+{failOutcome.result.coinsAwarded} 🪙</strong>
+                  </div>
+                </div>
+                <p className="gameover-note">
+                  Only coins gathered this run were at stake — your treasury is safe.
+                </p>
+              </>
+            )}
+
+            <div className="gameover-actions">
+              <button className="pixel-btn" onClick={retryLevel} disabled={submitting}>
+                ⚔ RETRY QUEST
+              </button>
+              <button className="pixel-btn pixel-btn--ghost" onClick={onExit} disabled={submitting}>
+                🗺 KINGDOM MAP
+              </button>
+            </div>
           </div>
         </div>
       )}

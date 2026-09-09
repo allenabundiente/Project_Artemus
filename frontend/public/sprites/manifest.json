@@ -1,0 +1,557 @@
+{
+  "player_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "player_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "player_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "player_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "enemy_goblin": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "enemy_slime": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "enemy_bat": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "enemy_bug": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "boss": {
+    "width": 24,
+    "height": 24,
+    "gridFallback": true
+  },
+  "bookworm": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "bookworm_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "chest": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "castle_gate": {
+    "width": 16,
+    "height": 24,
+    "gridFallback": true
+  },
+  "flag": {
+    "width": 16,
+    "height": 24,
+    "gridFallback": true
+  },
+  "torch": {
+    "width": 12,
+    "height": 10,
+    "gridFallback": true
+  },
+  "coin": {
+    "width": 13,
+    "height": 12,
+    "gridFallback": true
+  },
+  "heart": {
+    "width": 12,
+    "height": 9,
+    "gridFallback": true
+  },
+  "heart_empty": {
+    "width": 12,
+    "height": 9,
+    "gridFallback": true
+  },
+  "badge_mythril": {
+    "width": 12,
+    "height": 11,
+    "gridFallback": true
+  },
+  "badge_diamond": {
+    "width": 12,
+    "height": 11,
+    "gridFallback": true
+  },
+  "badge_gold": {
+    "width": 12,
+    "height": 11,
+    "gridFallback": true
+  },
+  "badge_iron": {
+    "width": 12,
+    "height": 11,
+    "gridFallback": true
+  },
+  "badge_copper": {
+    "width": 12,
+    "height": 11,
+    "gridFallback": true
+  },
+  "avatar_hair_short_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_male_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_idle": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_male_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_run1": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_male_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_run2": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  }
+}

@@ -43,6 +43,38 @@ export async function query<T extends pg.QueryResultRow>(sql: string, params: un
   return res.rows;
 }
 
+/**
+ * Anything that can run parameterized queries: the shared pool, or a client
+ * enrolled in an open transaction (see withTransaction).
+ */
+export interface DbExecutor {
+  query<T extends pg.QueryResultRow>(sql: string, params?: unknown[]): Promise<pg.QueryResult<T>>;
+}
+
+/**
+ * Run `fn` inside a single Postgres transaction. Every write it makes commits
+ * together or not at all — used so a quest's score write and its coin award
+ * can never desync (a crash mid-sequence rolls BOTH back).
+ */
+export async function withTransaction<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client as DbExecutor);
+    await client.query('COMMIT');
+    return out;
+  } catch (e) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // Connection already dead — the (implicit) transaction is rolled back anyway.
+    }
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 export async function queryOne<T extends pg.QueryResultRow>(sql: string, params: unknown[] = []): Promise<T | null> {
   const rows = await query<T>(sql, params);
   return rows[0] ?? null;
@@ -68,14 +100,16 @@ export interface UserRow {
   name: string;
   email: string;
   passwordHash: string;
-  role: 'teacher' | 'student';
+  role: 'teacher' | 'student' | 'admin';
   guildId: string | null;
   coins: number;
+  /** Wardrobe/avatar + misc prefs (jsonb). */
+  preferences: Record<string, unknown>;
   createdAt: Date;
 }
 
 function mapUser(r: any): UserRow {
-  return { id: r.id, name: r.name, email: r.email, passwordHash: r.password_hash, role: r.role, guildId: r.guild_id ?? null, coins: r.coins, createdAt: r.created_at };
+  return { id: r.id, name: r.name, email: r.email, passwordHash: r.password_hash, role: r.role, guildId: r.guild_id ?? null, coins: r.coins, preferences: r.preferences ?? {}, createdAt: r.created_at };
 }
 
 export interface GuildRow {
@@ -84,11 +118,13 @@ export interface GuildRow {
   passcode: string;
   teacherId: string;
   termSettings: Record<string, unknown>;
+  /** Optional per-guild map skin ({ theme }) — set by the teacher. */
+  mapSettings: Record<string, unknown>;
   createdAt: Date;
 }
 
 function mapGuild(r: any): GuildRow {
-  return { id: r.id, name: r.name, passcode: r.passcode, teacherId: r.teacher_id, termSettings: r.term_settings ?? {}, createdAt: r.created_at };
+  return { id: r.id, name: r.name, passcode: r.passcode, teacherId: r.teacher_id, termSettings: r.term_settings ?? {}, mapSettings: r.map_settings ?? {}, createdAt: r.created_at };
 }
 
 export interface ScoreRow {
@@ -103,6 +139,14 @@ export interface ScoreRow {
   livesRemaining: number;
   term: string;
   coinsAwarded: number;
+  /** Coins picked up during the run (fail accounting). */
+  coinsGathered: number;
+  /** Random penalty applied on fail (never dips into banked coins). */
+  coinsPenalty: number;
+  /** What actually hit the balance: netCoins = max(0, gathered − penalty). */
+  netCoins: number;
+  /** How the run ended, when it ended badly. */
+  failReason: 'out_of_lives' | 'out_of_time' | null;
   createdAt: Date;
 }
 
@@ -111,7 +155,9 @@ function mapScore(r: any): ScoreRow {
     id: r.id, userId: r.user_id, chapterId: r.chapter_id ?? null, guildId: r.guild_id ?? null,
     rawScore: r.raw_score, mistakes: r.mistakes, timeSeconds: r.time_seconds,
     finished: r.finished, livesRemaining: r.lives_remaining, term: r.term,
-    coinsAwarded: r.coins_awarded, createdAt: r.created_at,
+    coinsAwarded: r.coins_awarded, coinsGathered: r.coins_gathered ?? 0,
+    coinsPenalty: r.coins_penalty ?? 0, netCoins: r.net_coins ?? r.coins_awarded ?? 0,
+    failReason: r.fail_reason ?? null, createdAt: r.created_at,
   };
 }
 
@@ -188,6 +234,14 @@ export async function getChallengesForChapter(chapterId: string): Promise<Challe
   return rows.map(mapChallenge);
 }
 
+export async function getChapterWithText(chapterId: string): Promise<ChapterRow | null> {
+  const row = await queryOne<ChapterRow>(
+    `SELECT id, book_id AS "bookId", idx, title, text, code_blocks AS "codeBlocks" FROM chapters WHERE id = $1`,
+    [chapterId],
+  );
+  return row ?? null;
+}
+
 export async function countChallenges(bookId: string): Promise<number> {
   const row = await queryOne<{ c: string }>(`SELECT COUNT(*)::int AS c FROM challenges WHERE book_id = $1`, [bookId]);
   return row ? Number(row.c) : 0;
@@ -222,6 +276,20 @@ export async function upsertProgress(userId: string, bookId: string, p: Progress
   );
 }
 
+  /** Executor-aware per-book progress upsert for transactional quest flows. */
+export async function upsertProgressTx(ex: DbExecutor, userId: string, bookId: string, p: ProgressRow): Promise<void> {
+  await ex.query(
+    `INSERT INTO progress (user_id, book_id, completed_chapters, score, best_streak)
+     VALUES ($1, $2, $3::jsonb, $4, $5)
+     ON CONFLICT (user_id, book_id) DO UPDATE SET
+       completed_chapters = excluded.completed_chapters,
+       score = excluded.score,
+       best_streak = excluded.best_streak,
+       updated_at = now()`,
+    [userId, bookId, JSON.stringify(p.completedChapters), p.score, p.bestStreak]
+  );
+}
+
 // --- users ---------------------------------------------------------------------
 
 export async function getUserByEmail(email: string): Promise<UserRow | null> {
@@ -244,7 +312,18 @@ export async function addCoins(userId: string, amount: number): Promise<number> 
   return row ? Number(row.coins) : 0;
 }
 
-// --- guilds ---------------------------------------------------------------------
+/**
+ * Apply a coin delta on an open transaction (positive or negative) and return
+ * the new balance. Used by the transactional quest flows so the score row and
+ * the balance change commit together.
+ */
+export async function applyCoinsTx(ex: DbExecutor, userId: string, amount: number): Promise<number> {
+  const res = await ex.query<{ coins: number }>(
+    `UPDATE users SET coins = coins + $1 WHERE id = $2 RETURNING coins`,
+    [amount, userId],
+  );
+  return res.rows[0] ? Number(res.rows[0].coins) : 0;
+}
 
 const PASSCODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no ambiguous 0/O/1/L/I
 
@@ -328,14 +407,35 @@ export async function listGuildMembers(guildId: string): Promise<UserRow[]> {
 export async function insertScore(s: {
   userId: string; chapterId: string | null; rawScore: number; mistakes: number;
   timeSeconds: number; finished: boolean; livesRemaining: number; term: string; coinsAwarded: number;
+  coinsGathered?: number; coinsPenalty?: number; netCoins?: number;
+  failReason?: 'out_of_lives' | 'out_of_time' | null;
 }): Promise<ScoreRow> {
   // guild_id is filled in by the trg_set_score_guild trigger.
   const row = await queryOne(
-    `INSERT INTO scores (user_id, chapter_id, raw_score, mistakes, time_seconds, finished, lives_remaining, term, coins_awarded)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [s.userId, s.chapterId, s.rawScore, s.mistakes, s.timeSeconds, s.finished, s.livesRemaining, s.term, s.coinsAwarded]
+    `INSERT INTO scores (user_id, chapter_id, raw_score, mistakes, time_seconds, finished, lives_remaining, term, coins_awarded, coins_gathered, coins_penalty, net_coins, fail_reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+    [s.userId, s.chapterId, s.rawScore, s.mistakes, s.timeSeconds,
+     s.finished, s.livesRemaining, s.term, s.coinsAwarded,
+     s.coinsGathered ?? 0, s.coinsPenalty ?? 0, s.netCoins ?? s.coinsAwarded, s.failReason ?? null]
   );
   return mapScore(row);
+}
+
+/** Executor-aware variant used by the transactional quest-completion flow. */
+export async function insertScoreTx(ex: DbExecutor, s: {
+  userId: string; chapterId: string | null; rawScore: number; mistakes: number;
+  timeSeconds: number; finished: boolean; livesRemaining: number; term: string; coinsAwarded: number;
+  coinsGathered?: number; coinsPenalty?: number; netCoins?: number;
+  failReason?: 'out_of_lives' | 'out_of_time' | null;
+}): Promise<ScoreRow> {
+  const row = await ex.query<Record<string, unknown>>(
+    `INSERT INTO scores (user_id, chapter_id, raw_score, mistakes, time_seconds, finished, lives_remaining, term, coins_awarded, coins_gathered, coins_penalty, net_coins, fail_reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+    [s.userId, s.chapterId, s.rawScore, s.mistakes, s.timeSeconds,
+     s.finished, s.livesRemaining, s.term, s.coinsAwarded,
+     s.coinsGathered ?? 0, s.coinsPenalty ?? 0, s.netCoins ?? s.coinsAwarded, s.failReason ?? null]
+  );
+  return mapScore(row.rows[0]);
 }
 
 export interface LeaderboardEntry {
@@ -344,22 +444,29 @@ export interface LeaderboardEntry {
   termScore: number;
   questCount: number;
   rank: string;
+  /** Equipped avatar so the hall shows each hero's look. */
+  avatar?: Record<string, unknown>;
 }
 
 export async function getLeaderboard(guildId: string | null, term: string | null): Promise<LeaderboardEntry[]> {
   // Cumulative score per student, optionally scoped to one term.
   const rows = await query(
-    `SELECT u.id AS user_id, u.name,
+    `SELECT u.id AS user_id, u.name, u.preferences AS avatar,
             COALESCE(SUM(s.raw_score), 0)::int AS term_score,
             COUNT(s.id)::int AS quest_count
      FROM users u
      LEFT JOIN scores s ON s.user_id = u.id AND ($2::text IS NULL OR s.term::text = $2::text)
      WHERE u.role = 'student' AND (($1::uuid IS NOT NULL AND u.guild_id = $1::uuid) OR ($1::uuid IS NULL AND u.guild_id IS NULL))
-     GROUP BY u.id, u.name
+     GROUP BY u.id, u.name, u.preferences
      ORDER BY term_score DESC, u.name ASC`,
     [guildId, term]
   );
-  return rows.map((r: any) => ({ userId: r.user_id, name: r.name, termScore: Number(r.term_score), questCount: Number(r.quest_count), rank: rankForScore(Number(r.term_score)) }));
+  return rows.map((r: any) => ({
+    userId: r.user_id, name: r.name, termScore: Number(r.term_score), questCount: Number(r.quest_count),
+    rank: rankForScore(Number(r.term_score)),
+    // preferences stores { avatar: {...} } — unwrap so callers get the look itself.
+    avatar: ((r.avatar as Record<string, unknown>)?.avatar ?? r.avatar ?? {}) as Record<string, unknown>,
+  }));
 }
 
 export async function getTermScore(userId: string, term: string | null): Promise<number> {
@@ -388,3 +495,8 @@ export function rankForScore(score: number): string {
   }
   return rank;
 }
+
+// Re-export the admin/shop/cosmetics/map data layer so route modules can pull
+// everything from './db.js' (admin.ts itself imports query/queryOne from here —
+// it must be imported last to avoid a circular-init hazard at module load).
+export * from './admin.js';

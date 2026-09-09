@@ -86,7 +86,17 @@ export async function parsePdf(buffer: Buffer, fallbackTitle: string): Promise<P
 
       byY.sort((a, b) => b.y - a.y); // PDF y grows upward; top of page first
       const lines = byY.map((l) => {
-        const text = l.parts.map((p) => p.str).join('');
+        // pdf.js splits words into separate items; joining with '' concatenates
+        // them ("PressEntertoterminate"). Re-insert single spaces between items
+        // unless one side already has whitespace or the next starts punctuation.
+        let text = '';
+        for (const p of l.parts) {
+          const s = p.str;
+          if (text && !/\s$/.test(text) && !/^\s/.test(s) && !/^[,.;:!?)%\]]/.test(s) && !/[([{&]$/.test(text)) {
+            text += ' ';
+          }
+          text += s;
+        }
         const mono = l.parts.length > 0 && l.parts.every((p) => p.mono);
         return { text, mono };
       });

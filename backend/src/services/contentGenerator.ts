@@ -1,4 +1,4 @@
-import { callAnthropic, LlmError } from './llmClient.js';
+import { callLlm, LlmError } from './llmClient.js';
 import type { ChapterRow, CodeBlock } from '../db/types.js';
 
 export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank';
@@ -76,6 +76,37 @@ function extractJson(text: string): string {
   return candidate.slice(start, end + 1);
 }
 
+/**
+ * Best-effort repair of near-JSON from small local models: unquoted object
+ * keys, trailing commas, and // or slash-star comments are all common and all
+ * fixable without ambiguity.
+ */
+function repairJson(text: string): string {
+  let out = '';
+  let inStr = false;
+  let quoteChar = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      out += ch;
+      if (ch === '\\') { out += text[i + 1] ?? ''; i++; continue; }
+      if (ch === quoteChar) inStr = false;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { inStr = true; quoteChar = ch; out += ch; continue; }
+    if (ch === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; continue; }
+    if (ch === '/' && text[i + 1] === '*') { i += 2; while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++; i++; continue; }
+    out += ch;
+  }
+  // 'single-quoted' strings → "double-quoted" (values and keys)
+  out = out.replace(/'([^'\n]*)'/g, '"$1"');
+  // Quote bare object keys: { key: or , key:
+  out = out.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g, '$1"$2"$3');
+  // Trailing commas before } or ]
+  out = out.replace(/,\s*([}\]])/g, '$1');
+  return out;
+}
+
 function validateGenerated(raw: any): ChapterContent {
   if (typeof raw !== 'object' || raw === null) throw new Error('LLM response is not an object');
   const concept = typeof raw.concept === 'string' ? raw.concept.slice(0, 120) : 'Chapter concepts';
@@ -108,6 +139,8 @@ function validateGenerated(raw: any): ChapterContent {
     } else {
       if (correctAnswer.length === 0) continue;
     }
+    // Code-grounded types without code make no sense — reject them.
+    if ((type === 'spot_the_bug' || type === 'predict_output') && !code) continue;
 
     challenges.push({ type, prompt, code, options, correctAnswer, explanation, difficulty });
   }
@@ -134,22 +167,32 @@ function difficultyDirective(opts: GenerationOptions | undefined): string {
 
 /** Generate challenges for a chapter using the LLM. Retries once on malformed JSON. */
 export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOptions): Promise<ChapterContent> {
+  // Keep the prompt lean: every token must be prefilled, which is the dominant
+  // cost on CPU-only inference (local Ollama). ~6k chars of text + a few code
+  // blocks is plenty for grounded challenges.
   const userPrompt = [
     `Book chapter: "${chapter.title}"`,
     ``,
     `CHAPTER TEXT:`,
-    truncate(chapter.text, 14000),
+    truncate(chapter.text, 6000),
     ``,
     `CODE BLOCKS:`,
-    formatCodeBlocks(chapter.codeBlocks),
+    formatCodeBlocks(chapter.codeBlocks.slice(0, 6)),
     difficultyDirective(opts),
   ].join('\n');
 
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const raw = await callAnthropic(SYSTEM_PROMPT, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt);
-      return validateGenerated(JSON.parse(extractJson(raw)));
+      const raw = await callLlm(SYSTEM_PROMPT, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt, 2000);
+      const json = extractJson(raw);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(json);
+      } catch {
+        parsed = JSON.parse(repairJson(json)); // small models emit near-JSON
+      }
+      return validateGenerated(parsed);
     } catch (e) {
       lastErr = e as Error;
     }
@@ -251,14 +294,28 @@ interface Definition {
 }
 
 function extractDefinitions(text: string): Definition[] {
+  // Rejoin words hyphenated across line breaks ("pro-\ngram" → "program")
+  // and collapse whitespace so print-run line breaks don't mangle sentences.
+  const clean = text.replace(/(\w)-\n(\w)/g, '$1$2').replace(/[ \t]*\n[ \t]*/g, ' ');
   const out: Definition[] = [];
-  const re = /\b([A-Z][A-Za-z0-9 _\-]{1,40}?)\s+(is|are|refers to|means|is called|is known as|is defined as)\s+(a|an|the)?\s*([A-Za-z][^.\n]{5,140})/g;
+  const re = /\b([A-Z][A-Za-z0-9 _\-]{1,40}?)\s+(is|are|refers to|means|is called|is known as|is defined as)\s+(an|a|the)?\s*([A-Za-z][^.?\n]{5,140})/g;
+  const TERM_STOPWORDS = /^(that|which|what|who|how|why|where|when|there|this|it|they|you|we|if|but|and|or|so|then|in|on|at|to|for|with|by|from|as|an?|the)$/i;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = re.exec(clean)) !== null) {
     const term = m[1].trim();
-    if (term.length > 2 && term.length <= 40 && !out.some((d) => d.term === term)) {
-      out.push({ term, text: m[0].replace(/\s+/g, ' ').trim() });
-    }
+    const value = m[4].trim();
+    // Skip garbage terms: multi-clause fragments, stopword endings, or terms
+    // that are really sentence fragments from headings/questions.
+    const words = term.split(/\s+/);
+    if (term.length < 3 || words.length > 4) continue;
+    // Any stopword anywhere in a "term" means we've captured sentence fragment,
+    // not a noun phrase ("NET A computer", "Immediately following the expression").
+    if (words.some((w) => TERM_STOPWORDS.test(w))) continue;
+    // Two consecutive capitalized words mid-term are usually a heading collision.
+    if (words.length >= 2 && words.slice(1).some((w) => /^[A-Z]/.test(w))) continue;
+    if (value.length < 8 || /^[A-Z][a-z]+\s+[a-z]+\s+(that|which|who)\b/.test(value)) continue;
+    if (out.some((d) => d.term === term)) continue;
+    out.push({ term, text: `${term} ${m[2]} ${m[3] ?? ''} ${value}`.replace(/\s+/g, ' ').trim() });
   }
   return out.slice(0, 8);
 }
@@ -286,6 +343,34 @@ function shuffle<T>(arr: T[]): T[] {
  * spot_the_bug challenge. Returns null if no safe mutation applies.
  */
 function mutateBug(lines: string[]): { code: string; choices: string[]; answer: string; reason: string; original: string } | null {
+  // C#: a statement missing its terminating semicolon.
+  const semi = lines.findIndex((l) => /;\s*$/.test(l) && !/^\s*(\/\/|using\s)/.test(l) && /[=)]|return\b/.test(l));
+  if (semi !== -1) {
+    const original = lines[semi];
+    const buggy = original.replace(/;\s*$/, '');
+    return {
+      code: withReplacedLine(lines, semi, buggy),
+      choices: [buggy.trim(), original.trim(), `${original.trim().replace(/;\s*$/, ';')}// forgot something?`],
+      answer: buggy.trim(),
+      reason: `a C# statement is missing its terminating semicolon`,
+      original: original.trim(),
+    };
+  }
+
+  // C#: Console.WriteLine / Console.Write call missing its closing parenthesis.
+  const cw = lines.findIndex((l) => /Console\.(Write|WriteLine)\(.*\)\s*;?\s*$/.test(l));
+  if (cw !== -1) {
+    const original = lines[cw];
+    const buggy = original.replace(/\)(\s*;?)\s*$/, '$1');
+    return {
+      code: withReplacedLine(lines, cw, buggy),
+      choices: [buggy.trim(), original.trim(), buggy.trim().replace(/\($/, '();')],
+      answer: buggy.trim(),
+      reason: `the Console call is missing its closing parenthesis, which breaks the syntax`,
+      original: original.trim(),
+    };
+  }
+
   const idx = lines.findIndex((l) => /^\s*(def |class |if |elif |else|for |while )/.test(l) && l.trim().endsWith(':'));
   if (idx !== -1) {
     const original = lines[idx];
@@ -337,6 +422,27 @@ function withReplacedLine(lines: string[], idx: number, replacement: string): st
 function summarizeCode(block: CodeBlock): { correct: string; distractors: string[] } | null {
   const code = block.code;
   const firstLine = code.split('\n').find((l) => l.trim().length > 0)?.trim() ?? '';
+  // --- C# patterns -----------------------------------------------------------
+  if (/^using\s+[\w.]+\s*;/.test(firstLine)) {
+    return { correct: 'makes a library namespace available so its types can be used', distractors: ['defines a new class', 'prints output to the console', 'creates a variable'] };
+  }
+  if (/^namespace\s+\w+/.test(firstLine)) {
+    const name = firstLine.replace(/^namespace\s+/, '').split(/[\s{;]/)[0];
+    return { correct: `declares a namespace called ${name}`, distractors: [`defines a class called ${name}`, `imports a library called ${name}`, `calls a method called ${name}`] };
+  }
+  if (/Console\.(Write|WriteLine)\s*\(/.test(firstLine)) {
+    return { correct: 'prints output to the console', distractors: ['reads input from the user', 'declares a variable', 'defines a class'] };
+  }
+  if (/^static\s+[\w<>\[\]]+\s+Main\s*\(/.test(firstLine)) {
+    return { correct: "defines the program's entry point — where execution begins", distractors: ['defines a reusable library function', 'prints a welcome message', 'declares a namespace'] };
+  }
+  if (/^(int|double|float|decimal|bool|string|char|long|var|byte)\s+\w+\s*=/.test(firstLine)) {
+    return { correct: 'declares a variable and assigns it a value', distractors: ['calls a method', 'imports a namespace', 'compares two values'] };
+  }
+  if (/^foreach\s*\(/.test(firstLine)) {
+    return { correct: 'loops over each element in a collection, running the body once per element', distractors: ['runs exactly once', 'waits for user input', 'declares a class'] };
+  }
+  // --- generic / Python / JS patterns ---------------------------------------
   if (/^def\s+\w+/.test(firstLine)) {
     const name = firstLine.replace(/^def\s+/, '').split(/[(:]/)[0];
     return {

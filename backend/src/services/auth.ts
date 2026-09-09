@@ -6,9 +6,11 @@ import type { NextFunction, Request, Response } from 'express';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const JWT_EXPIRES_IN = '7d';
 
+export type Role = 'admin' | 'teacher' | 'student';
+
 export interface AuthUser {
   id: string;
-  role: 'teacher' | 'student';
+  role: Role;
   name: string;
 }
 
@@ -38,7 +40,7 @@ export function extractAuth(req: Request): AuthUser | null {
   if (!header?.startsWith('Bearer ')) return null;
   try {
     const payload = jwt.verify(header.slice(7), JWT_SECRET) as { sub: string; role: string; name: string };
-    if (!payload?.sub || !['teacher', 'student'].includes(payload.role)) return null;
+    if (!payload?.sub || !['teacher', 'student', 'admin'].includes(payload.role)) return null;
     return { id: payload.sub, role: payload.role as AuthUser['role'], name: payload.name };
   } catch {
     return null;
@@ -58,11 +60,22 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 export function requireRole(role: 'teacher' | 'student') {
   return (req: Request, res: Response, next: NextFunction): void => {
     requireAuth(req, res, () => {
-      if (req.user?.role !== role) {
+      // Admins pass every role gate (they retain full teacher powers too).
+      if (req.user?.role !== role && req.user?.role !== 'admin') {
         res.status(403).json({ error: `This action requires the ${role} role` });
         return;
       }
       next();
     });
   };
+}
+
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  requireAuth(req, res, () => {
+    if (req.user?.role !== 'admin') {
+      res.status(403).json({ error: 'This action requires the admin role' });
+      return;
+    }
+    next();
+  });
 }

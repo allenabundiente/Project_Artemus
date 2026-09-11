@@ -90,6 +90,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       const res = await api.regeneratePasscode();
       setGuildCode(res.passcode);
       setNotice(`New guild code: ${res.passcode}`);
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -132,6 +133,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       onUserUpdated(res.user);
       setNotice(`You joined the guild "${res.guild.name}"!`);
       setPasscode('');
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -146,6 +148,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       const res = await api.leaveGuild();
       onUserUpdated(res.user);
       setNotice('You left the guild. You are a solo adventurer once more.');
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
     }

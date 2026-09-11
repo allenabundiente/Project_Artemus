@@ -5,49 +5,58 @@ import { spriteDataUrl } from '../game/sprites';
 import ChallengeDialog from './ChallengeDialog';
 
 interface Props {
-  /** Question pool for this battle (chapter challenges). */
-  challenges: Challenge[];
-  /** The challenge this monster leads with (regular battles). */
-  leadChallenge?: Challenge;
+  /**
+   * This monster's dealt question queue — exactly one DISTINCT challenge per
+   * heart (regular battles get it from the run's no-repeat deal; the boss gets
+   * the challenges the student already faced earlier in the run).
+   */
+  queue: Challenge[];
+  /** Hearts the monster starts with (queue length). */
+  maxHp: number;
   /** Player hearts (mirrored from the engine). */
   lives: number;
   /** Boss variant: bigger monster, level ends on victory. */
   boss?: boolean;
   /** Player took a hit (wrong answer). */
   onDamage: () => void;
+  /** A correct answer landed a hit on the monster (regular battles only — the engine tracks hearts). */
+  onHit?: () => void;
   /** Player retreats a step (battle dismissed without victory). */
   onRetreat: () => void;
   /** Monster defeated. */
   onVictory: () => void;
 }
 
-const MONSTER_MAX_HP = 3;
-
-export default function BattleScreen({ challenges, leadChallenge, lives, boss = false, onDamage, onRetreat, onVictory }: Props) {
-  const [monsterHp, setMonsterHp] = useState(MONSTER_MAX_HP);
+export default function BattleScreen({ queue, maxHp, lives, boss = false, onDamage, onHit, onRetreat, onVictory }: Props) {
+  const [monsterHp, setMonsterHp] = useState(maxHp);
   const [qIndex, setQIndex] = useState(0);
-  const [round, setRound] = useState(0);
+  /** Remount counter: a fresh attempt at the same question after a wrong answer. */
+  const [attempt, setAttempt] = useState(0);
   const [hurt, setHurt] = useState(false);
   const [victory, setVictory] = useState(false);
   const [message, setMessage] = useState(
     boss ? 'THE DUNGEON BOSS AWAKENS!' : 'A GOBLISH MONSTER BLOCKS YOUR PATH!'
   );
 
-  const queue = useQueue(challenges, leadChallenge, boss);
   const monsterName = boss ? 'DUNGEON BOSS' : 'MONSTER';
+  const challenge = queue[Math.min(qIndex, queue.length - 1)];
 
   function handleResult(correct: boolean) {
     if (correct) {
       sfx.slash();
       setHurt(true);
-      window.setTimeout(() => setHurt(false), 350);
+      window.setTimeout(() => setHurt(false), 250);
       const hp = monsterHp - 1;
       setMonsterHp(hp);
       if (hp <= 0) {
         setMessage(`${monsterName} IS DEFEATED!`);
         setVictory(true);
       } else {
-        setMessage(`DIRECT HIT! (${hp}/${MONSTER_MAX_HP} HP LEFT)`);
+        onHit?.(); // engine removes one heart from this monster
+        setMessage(`DIRECT HIT! (${hp} ${hp === 1 ? 'HEART' : 'HEARTS'} LEFT)`);
+        // Next question = next heart. The queue is pre-dealt and distinct per
+        // heart, so a multi-heart monster never shows the same question twice.
+        setQIndex((i) => Math.min(i + 1, queue.length - 1));
       }
     } else {
       onDamage(); // engine plays the hit sound + updates hearts
@@ -60,9 +69,9 @@ export default function BattleScreen({ challenges, leadChallenge, lives, boss = 
       onVictory();
       return;
     }
-    // Battle continues: advance to the next question (wraps around).
-    setQIndex((qIndex + 1) % queue.length);
-    setRound((r) => r + 1);
+    // Wrong answer: the same question comes back for another attempt (the
+    // monster keeps its hearts — only correct answers land hits).
+    setAttempt((a) => a + 1);
   }
 
   return (
@@ -101,11 +110,16 @@ export default function BattleScreen({ challenges, leadChallenge, lives, boss = 
         </div>
         <div style={{ textAlign: 'right' }}>
           <div className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)', marginBottom: '0.3rem' }}>
-            HP
+            HEARTS
           </div>
           <div className="boss-hp" style={{ justifyContent: 'flex-end' }}>
-            {Array.from({ length: MONSTER_MAX_HP }, (_, i) => (
-              <div key={i} className={`hp-cell ${i < monsterHp ? '' : 'hp-cell--empty'}`} />
+            {Array.from({ length: maxHp }, (_, i) => (
+              <img
+                key={i}
+                src={spriteDataUrl(i < monsterHp ? 'heart' : 'heart_empty')}
+                alt=""
+                style={{ width: 18, height: 14, imageRendering: 'pixelated' }}
+              />
             ))}
           </div>
           <div className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-blue)', margin: '0.5rem 0 0.3rem' }}>
@@ -135,8 +149,8 @@ export default function BattleScreen({ challenges, leadChallenge, lives, boss = 
       ) : (
         <>
           <ChallengeDialog
-            key={`${qIndex}-${round}`}
-            challenge={queue[qIndex]}
+            key={`${attempt}-${qIndex}-${monsterHp}`}
+            challenge={challenge}
             onResult={handleResult}
             onDismiss={handleDismiss}
           />
@@ -149,18 +163,4 @@ export default function BattleScreen({ challenges, leadChallenge, lives, boss = 
       )}
     </div>
   );
-}
-
-/** Bosses get the hardest questions first; regular monsters lead with their own challenge. */
-function useQueue(challenges: Challenge[], lead: Challenge | undefined, boss: boolean): Challenge[] {
-  const [queue] = useState(() => {
-    if (boss) {
-      const rank = { hard: 0, medium: 1, easy: 2 } as const;
-      return [...challenges].sort((a, b) => rank[a.difficulty] - rank[b.difficulty]);
-    }
-    if (!lead) return [...challenges];
-    const rest = challenges.filter((c) => c.id !== lead.id);
-    return [lead, ...rest];
-  });
-  return queue;
 }

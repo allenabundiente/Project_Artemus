@@ -402,6 +402,25 @@ export async function listGuildMembers(guildId: string): Promise<UserRow[]> {
   return rows.map(mapUser);
 }
 
+/** Every guild with its member count — the admin panel's guild directory. */
+export async function listGuildsWithCounts(): Promise<(GuildRow & { memberCount: number })[]> {
+  const rows = await query(
+    `SELECT g.*, COUNT(u.id)::int AS member_count
+     FROM guilds g LEFT JOIN users u ON u.guild_id = g.id AND u.role = 'student'
+     GROUP BY g.id ORDER BY g.created_at`,
+  );
+  return rows.map((r) => ({ ...mapGuild(r), memberCount: Number(r.member_count) }));
+}
+
+/**
+ * Remove a member from their guild (teacher kicking a student, or an admin
+ * managing any guild). Idempotent: clearing a non-member's guild_id is a no-op.
+ */
+export async function removeGuildMember(userId: string): Promise<UserRow> {
+  const row = await queryOne(`UPDATE users SET guild_id = NULL WHERE id = $1 RETURNING *`, [userId]);
+  return mapUser(row);
+}
+
 // --- scores ---------------------------------------------------------------------
 
 export async function insertScore(s: {

@@ -49,7 +49,8 @@ Rules:
     }
   ]
 }
-- Generate 3-5 challenges per chapter, ordered easy to hard.
+- Generate between 10 and 15 challenges per chapter, ordered easy to hard.
+- Vary the angle on each challenge: every prompt must be recognizably DIFFERENT from the others (different snippet, different blank, different distractor set) — never paraphrase the same question twice.
 - Mix types. Use the book's real code snippets — do not rewrite them except to introduce one deliberate bug for spot_the_bug.
 - Keep code snippets short (under 15 lines).`;
 
@@ -184,7 +185,9 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const raw = await callLlm(SYSTEM_PROMPT, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt, 2000);
+      // 10–15 challenges of validated JSON needs more room than the old 2000
+      // cap, or truncation eats half the batch on smaller models.
+      const raw = await callLlm(SYSTEM_PROMPT, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt, 6000);
       const json = extractJson(raw);
       let parsed: unknown;
       try {
@@ -208,8 +211,10 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
   const challenges: GeneratedChallenge[] = [];
 
   // 1) Definition sentences → fill_in_blank + multiple_choice
+  // A quest run needs a challenge for every monster heart — build a deeper
+  // bench than before so runs don't have to recycle questions.
   const defs = extractDefinitions(chapter.text);
-  for (const d of defs.slice(0, 2)) {
+  for (const d of defs.slice(0, 6)) {
     challenges.push({
       type: 'fill_in_blank',
       prompt: `Complete the sentence from the book: "${d.text.replace(d.term, '______')}"`,
@@ -220,10 +225,15 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
       difficulty: 'easy',
     });
   }
-  if (defs.length >= 2) {
-    const d = defs[0];
+  // One MC per definition pair (bounded so tiny chapters stay sane).
+  for (let i = 0; i + 1 < defs.length && i < 4; i++) {
+    const d = defs[i];
     const term = stripArticle(d.term);
-    const distractors = defs.slice(1, 4).map((x) => stripArticle(x.term)).filter((t) => t && t !== term);
+    // Distractors: other defined terms (never the current one).
+    const distractors = defs
+      .filter((x, j) => j !== i)
+      .map((x) => stripArticle(x.term))
+      .filter((t) => t && t !== term);
     if (term && distractors.length >= 2) {
       const options = shuffle([term, ...distractors.slice(0, 3)]);
       challenges.push({
@@ -239,7 +249,7 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
   }
 
   // 2) Code blocks → predict_output / spot_the_bug
-  for (const block of chapter.codeBlocks.slice(0, 4)) {
+  for (const block of chapter.codeBlocks.slice(0, 8)) {
     const lines = block.code.split('\n').filter((l) => l.trim().length > 0);
     if (lines.length < 2) continue;
 
@@ -285,7 +295,7 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
     });
   }
 
-  return { concept: chapter.title, challenges: challenges.slice(0, 6) };
+  return { concept: chapter.title, challenges: challenges.slice(0, 20) };
 }
 
 interface Definition {

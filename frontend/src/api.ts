@@ -1,6 +1,6 @@
 import type {
   AuthResponse, AuthUser, BookDetail, BookMeta, Challenge, FeatureRow, GenerateResult,
-  GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
+  GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
   Progress, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
 } from './types';
@@ -19,6 +19,16 @@ export function setToken(token: string | null): void {
 export function authHeaders(): Record<string, string> {
   const t = getToken();
   return t ? { authorization: `Bearer ${t}` } : {};
+}
+
+/**
+ * Hard-refresh the whole app after an identity-level change (joining or
+ * leaving a guild, regenerating a guild code, dismissing a member): every
+ * screen that flows from App's user/guild state — header, panels, rosters —
+ * is rebuilt from the server, so nothing can stay stale.
+ */
+export function refreshApp(): void {
+  window.location.reload();
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -84,6 +94,39 @@ export async function joinGuild(passcode: string): Promise<{ user: AuthUser; gui
 
 export async function leaveGuild(): Promise<{ user: AuthUser }> {
   return send('/api/guilds/leave', 'POST');
+}
+
+// --- guild member management (teacher) ----------------------------------------------
+
+/** Kick a student from your guild — their account, coins, and scores survive. */
+export async function removeGuildMember(userId: string): Promise<{ removed: { id: string; name: string } }> {
+  return send(`/api/guilds/mine/members/${userId}`, 'DELETE');
+}
+
+// --- guild management (admin: any guild, by id) ---------------------------------------
+
+export async function getAdminGuilds(): Promise<{ guilds: GuildAdminInfo[] }> {
+  return get('/api/admin/guilds');
+}
+
+export async function getAdminGuildMembers(guildId: string): Promise<{ roster: RosterEntry[] }> {
+  return get(`/api/admin/guilds/${guildId}/members`);
+}
+
+export async function removeAdminGuildMember(guildId: string, userId: string): Promise<{ removed: { id: string; name: string } }> {
+  return send(`/api/admin/guilds/${guildId}/members/${userId}`, 'DELETE');
+}
+
+export async function regenerateAdminGuildPasscode(guildId: string): Promise<{ passcode: string }> {
+  return send(`/api/admin/guilds/${guildId}/regenerate-passcode`, 'POST');
+}
+
+export async function getAdminGuildSettings(guildId: string): Promise<{ guildId: string; termSettings: Record<string, TermSettings> }> {
+  return get(`/api/admin/guilds/${guildId}/settings`);
+}
+
+export async function saveAdminGuildSettings(guildId: string, termSettings: Record<string, TermSettings>): Promise<{ guildId: string; termSettings: Record<string, TermSettings> }> {
+  return send(`/api/admin/guilds/${guildId}/settings`, 'PUT', { termSettings });
 }
 
 // --- term settings (teacher) ---------------------------------------------------------

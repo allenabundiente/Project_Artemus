@@ -55,6 +55,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       setNotice(`Guild "${res.guild.name}" founded! Share passcode ${res.guild.passcode} with your students.`);
       await onRefreshUser();
       await refreshGuildData();
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -68,8 +69,26 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       const res = await api.regeneratePasscode();
       setPasscode(res.passcode);
       setNotice(`New passcode: ${res.passcode}`);
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
+    }
+  }
+
+  /** Remove a student from the guild (their account, coins, and scores survive). */
+  async function handleRemoveMember(m: RosterEntry) {
+    if (!window.confirm(`Dismiss ${m.name} from the guild? Their progress is kept — they can rejoin with the code.`)) return;
+    setError(null);
+    setBusy(`Dismissing ${m.name}…`);
+    try {
+      await api.removeGuildMember(m.id);
+      setNotice(`${m.name} has left the guild.`);
+      await refreshGuildData();
+      api.refreshApp();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -182,6 +201,15 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                       last active {new Date(m.lastActive).toLocaleDateString()}
                     </span>
                     <span className="pixel-font" style={{ fontSize: '0.7rem', color: 'var(--d-gold)' }}>{m.score}</span>
+                    <button
+                      className="pixel-btn pixel-btn--ghost"
+                      style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                      title="Dismiss from the guild (progress is kept)"
+                      onClick={() => void handleRemoveMember(m)}
+                      disabled={!!busy}
+                    >
+                      ✖ DISMISS
+                    </button>
                   </div>
                 ))}
               </div>

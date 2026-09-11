@@ -11,3 +11,4 @@ release/
 *.log
 backend/data/arcade.db-*
 .DS_Store
+.freebuff/

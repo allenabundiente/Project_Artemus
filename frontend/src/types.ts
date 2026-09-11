@@ -166,6 +166,16 @@ export interface GuildInfo {
   termSettings?: Record<string, unknown>;
 }
 
+/** Admin directory row: every guild with its leader, code, and size. */
+export interface GuildAdminInfo {
+  id: string;
+  name: string;
+  passcode: string;
+  teacherId: string;
+  teacherName: string;
+  memberCount: number;
+}
+
 export interface RosterEntry {
   id: string;
   name: string;

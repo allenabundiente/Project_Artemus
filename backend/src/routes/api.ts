@@ -6,7 +6,7 @@ import { isLlmConfigured, activeProvider, llmModeLabel } from '../services/llmCl
 import { computeScore, DEFAULT_SCORE_WEIGHTS, type ScoreWeights } from '../services/scoring.js';
 import { resolveTermSettings, sanitizeTermSettings, TERMS, type TermSettings } from '../services/termSettings.js';
 import { buildLessonOverview } from '../services/lesson.js';
-import { hashPassword, verifyPassword, requireAuth, requireRole, signToken } from '../services/auth.js';
+import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, signToken } from '../services/auth.js';
 import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
 import { registerAdminRoutes, listCustomThemes } from './admin.js';
 import {
@@ -19,6 +19,7 @@ import {
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
   getGlobalMapConfig, getGuildMapSettings, setGuildMapTheme,
+  listGuildsWithCounts, removeGuildMember,
   type GuildRow, type UserRow, type ChapterRow,
 } from '../db/db.js';
 
@@ -78,6 +79,14 @@ async function resolveUserGuild(user: UserRow): Promise<GuildRow | null> {
   return null;
 }
 
+/** Same as resolveUserGuild, but admins may address ANY guild by :guildId. */
+async function resolveManagedGuild(user: UserRow, guildId: string | null): Promise<GuildRow | null> {
+  if (user.role === 'admin') return guildId ? getGuild(guildId) : null;
+  const own = await resolveUserGuild(user);
+  if (own && guildId && own.id !== guildId) return null; // teachers stay in their lane
+  return own;
+}
+
 export function createApiRouter(): Router {
   const router = Router();
   initDbResilient();
@@ -96,6 +105,78 @@ export function createApiRouter(): Router {
   function publicUser(u: UserRow) {
     return { id: u.id, name: u.name, email: u.email, role: u.role, guildId: u.guildId, coins: u.coins };
   }
+
+  // --- admin: guild management (any guild, by id) -------------------------------------
+
+  /** The guild directory: every guild, its leader, code, and member count. */
+  router.get('/admin/guilds', requireAdmin, async (_req, res) => {
+    const guilds = await listGuildsWithCounts();
+    const leaders = await Promise.all(guilds.map(async (g) => ({
+      ...g,
+      teacherName: (await getUserById(g.teacherId))?.name ?? '—',
+    })));
+    res.json({ guilds: leaders });
+  });
+
+  /** Admin view of one guild's roster (same shape as the teacher roster). */
+  router.get('/admin/guilds/:guildId/members', requireAdmin, async (req, res) => {
+    const guild = await getGuild(String(req.params.guildId));
+    if (!guild) return res.status(404).json({ error: 'Guild not found' });
+    const members = await listGuildMembers(guild.id);
+    const roster = await Promise.all(members.map(async (m) => {
+      const termScore = await getTermScore(m.id, null);
+      return {
+        id: m.id, name: m.name, rank: rankForScore(termScore), score: termScore, lastActive: m.createdAt,
+        avatar: sanitizeAvatar((m.preferences as { avatar?: unknown })?.avatar ?? m.preferences),
+      };
+    }));
+    res.json({ roster });
+  });
+
+  /** Admin kick: same effect as the teacher kick, on any guild's member. */
+  router.delete('/admin/guilds/:guildId/members/:userId', requireAdmin, async (req, res) => {
+    const guild = await getGuild(String(req.params.guildId));
+    if (!guild) return res.status(404).json({ error: 'Guild not found' });
+    const member = await getUserById(String(req.params.userId));
+    if (!member || member.guildId !== guild.id) {
+      return res.status(404).json({ error: 'That adventurer is not in this guild' });
+    }
+    const updated = await removeGuildMember(member.id);
+    res.json({ removed: { id: updated.id, name: updated.name } });
+  });
+
+  /** Admin regenerates any guild's join code. */
+  router.post('/admin/guilds/:guildId/regenerate-passcode', requireAdmin, async (req, res) => {
+    const guild = await getGuild(String(req.params.guildId));
+    if (!guild) return res.status(404).json({ error: 'Guild not found' });
+    const updated = await regeneratePasscode(guild.id);
+    res.json({ passcode: updated.passcode });
+  });
+
+  /**
+   * Admin reads/writes a guild's term settings through the same
+   * resolve/sanitize pipeline the teacher routes use — scoped to :guildId.
+   */
+  router.get('/admin/guilds/:guildId/settings', requireAdmin, async (req, res) => {
+    const guild = await getGuild(String(req.params.guildId));
+    if (!guild) return res.status(404).json({ error: 'Guild not found' });
+    const resolved = Object.fromEntries(TERMS.map((t) => [t, resolveTermSettings(t, guild.termSettings)]));
+    res.json({ guildId: guild.id, termSettings: resolved });
+  });
+
+  router.put('/admin/guilds/:guildId/settings', requireAdmin, async (req, res) => {
+    try {
+      const guild = await getGuild(String(req.params.guildId));
+      if (!guild) return res.status(404).json({ error: 'Guild not found' });
+      const sanitized = sanitizeTermSettings(req.body?.termSettings);
+      const updated = await updateGuildTermSettings(guild.id, sanitized);
+      const resolved = Object.fromEntries(TERMS.map((t) => [t, resolveTermSettings(t, updated.termSettings)]));
+      res.json({ guildId: guild.id, termSettings: resolved });
+    } catch (e: any) {
+      console.error('[adminSaveGuildSettings]', e);
+      res.status(500).json({ error: 'Could not save settings' });
+    }
+  });
 
   // --- auth ------------------------------------------------------------------
 
@@ -271,6 +352,22 @@ export function createApiRouter(): Router {
       };
     }));
     res.json({ roster });
+  });
+
+  // --- teacher: manage guild members ------------------------------------------------
+  //
+  // Kicking clears the student's guild_id (their account, coins, and scores
+  // survive — they simply leave the guild and can rejoin with a code).
+
+  router.delete('/guilds/mine/members/:userId', requireRole('teacher'), async (req, res) => {
+    const guild = await getGuildByTeacher(req.user!.id);
+    if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    const member = await getUserById(String(req.params.userId));
+    if (!member || member.guildId !== guild.id) {
+      return res.status(404).json({ error: 'That adventurer is not in your guild' });
+    }
+    const updated = await removeGuildMember(member.id);
+    res.json({ removed: { id: updated.id, name: updated.name } });
   });
 
   router.post('/guilds/join', requireRole('student'), async (req, res) => {

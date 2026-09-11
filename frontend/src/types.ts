@@ -123,6 +123,7 @@ export interface MapConfig {
 export interface ThemeMeta {
   id: string;
   name: string;
+  builtin?: boolean;
 }
 
 export interface MapResolve {

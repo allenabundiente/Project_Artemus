@@ -5,6 +5,7 @@ import { ArcadeEngine, buildLayout, BACKING_W, BACKING_H } from '../game/engine'
 import { loadSprites, spriteDataUrl } from '../game/sprites';
 import { getAnimations, loadExtraSprites } from '../game/animations';
 import { sfx } from '../game/sfx';
+import { loadCustomThemes } from '../game/themes';
 import BattleScreen from './BattleScreen';
 
 interface Props {
@@ -66,6 +67,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         const [challenges, termInfo] = await Promise.all([
           api.getChallenges(bookId, chapterId),
           api.getTermSettings(term),
+          loadCustomThemes(),
         ]);
         if (cancelled) return;
         if (challenges.length === 0) {

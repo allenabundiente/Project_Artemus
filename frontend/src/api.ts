@@ -259,6 +259,37 @@ export async function deleteAnimation(name: string): Promise<{ ok: boolean }> {
   return send(`/api/admin/animations/${encodeURIComponent(name)}`, 'DELETE');
 }
 
+// --- admin: custom map themes ---------------------------------------------------------
+
+export interface CustomThemePayload {
+  name: string;
+  sky: string;
+  stars: string;
+  farHills: string;
+  nearHills: string;
+  pit: string;
+  floorTop: string;
+  floorBody: string;
+  floorSpeckle: string;
+  hpFilled: string;
+  hpEmpty: string;
+  torchPole?: string;
+  torchSconce?: string;
+  particleHit?: string;
+  particleScore?: string;
+  dustColor?: string;
+  monsters?: string[];
+  spriteOverrides?: Record<string, string>;
+}
+
+export async function saveCustomTheme(id: string, theme: CustomThemePayload): Promise<{ ok: boolean; theme: Record<string, unknown> }> {
+  return send(`/api/admin/themes/${encodeURIComponent(id)}`, 'PUT', theme);
+}
+
+export async function deleteCustomTheme(id: string): Promise<{ ok: boolean }> {
+  return send(`/api/admin/themes/${encodeURIComponent(id)}`, 'DELETE');
+}
+
 export async function getAdminMap(): Promise<MapConfig> {
   return get('/api/admin/map');
 }

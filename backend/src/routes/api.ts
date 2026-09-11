@@ -8,7 +8,7 @@ import { resolveTermSettings, sanitizeTermSettings, TERMS, type TermSettings } f
 import { buildLessonOverview } from '../services/lesson.js';
 import { hashPassword, verifyPassword, requireAuth, requireRole, signToken } from '../services/auth.js';
 import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
-import { registerAdminRoutes } from './admin.js';
+import { registerAdminRoutes, listCustomThemes } from './admin.js';
 import {
   initDbResilient, query, queryOne, withTransaction, applyCoinsTx, insertScoreTx, upsertProgressTx,
   insertBook, insertChapter, insertChallenge, getBook, listBooks,
@@ -145,14 +145,15 @@ export function createApiRouter(): Router {
     });
   });
 
-  // Which map themes exist (used by teacher skin picker + admin panel). Static
-  // metadata lives in the frontend theme registry; the backend just relays the
-  // ids it is allowed to store.
+  // Which map themes exist (used by teacher skin picker + admin panel): the
+  // static built-ins plus admin-defined custom themes (colors + sprite swaps
+  // persisted backend-side, registered into the game at quest start).
   router.get('/themes', requireAuth, (_req, res) => {
     res.json({
       themes: [
-        { id: 'dungeon', name: 'Dungeon Night' },
-        { id: 'forest', name: 'Firefly Glade' },
+        { id: 'dungeon', name: 'Dungeon Night', builtin: true },
+        { id: 'forest', name: 'Firefly Glade', builtin: true },
+        ...listCustomThemes().map((t) => ({ id: t.id, name: String(t.name ?? t.id), builtin: false })),
       ],
     });
   });
@@ -169,6 +170,14 @@ export function createApiRouter(): Router {
     medium: ['dungeon', 'forest'],
     hard: ['dungeon'],
   };
+  // Custom themes join the random pools so admins' maps appear without a
+  // teacher pinning them.
+  const customIds = listCustomThemes().map((t) => t.id);
+  if (customIds.length > 0) {
+    DIFFICULTY_THEMES.easy = [...DIFFICULTY_THEMES.easy, ...customIds];
+    DIFFICULTY_THEMES.medium = [...DIFFICULTY_THEMES.medium, ...customIds];
+    DIFFICULTY_THEMES.hard = [...DIFFICULTY_THEMES.hard, ...customIds];
+  }
   router.get('/map/resolve', requireAuth, async (req, res) => {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -180,7 +189,11 @@ export function createApiRouter(): Router {
 
     // 2. Admin global config.
     const cfg = await getGlobalMapConfig();
-    if (cfg.mode === 'fixed') return res.json({ theme: cfg.fixedTheme, source: 'admin' as const });
+    if (cfg.mode === 'fixed') {
+      // A pinned theme may have been deleted since — verify it still exists.
+      const known = ['dungeon', 'forest'].includes(cfg.fixedTheme) || listCustomThemes().some((t) => t.id === cfg.fixedTheme);
+      if (known) return res.json({ theme: cfg.fixedTheme, source: 'admin' as const });
+    }
 
     // 3. Random by difficulty — deterministic hash so revisits agree.
     const diff = typeof req.query.difficulty === 'string' ? req.query.difficulty : 'medium';

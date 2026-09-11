@@ -84,6 +84,65 @@ export const FOREST: Theme = {
 
 export const THEMES: Theme[] = [DUNGEON, FOREST];
 
+/**
+ * Register admin-defined custom themes (fetched from /api/themes) into the
+ * runtime registry. Built-ins can never be replaced; a re-registration with
+ * the same id updates the existing custom theme in place.
+ */
+export function registerCustomThemes(list: ({ id: string; name: string } & Partial<Theme>)[]): void {
+  for (const raw of list) {
+    if (!raw?.id || ['dungeon', 'forest'].includes(raw.id)) continue;
+    const theme: Theme = {
+      id: raw.id,
+      name: raw.name ?? raw.id,
+      sky: raw.sky ?? DUNGEON.sky,
+      stars: raw.stars ?? DUNGEON.stars,
+      farHills: raw.farHills ?? DUNGEON.farHills,
+      nearHills: raw.nearHills ?? DUNGEON.nearHills,
+      pit: raw.pit ?? DUNGEON.pit,
+      floorTop: raw.floorTop ?? DUNGEON.floorTop,
+      floorBody: raw.floorBody ?? DUNGEON.floorBody,
+      floorSpeckle: raw.floorSpeckle ?? DUNGEON.floorSpeckle,
+      hpFilled: raw.hpFilled ?? DUNGEON.hpFilled,
+      hpEmpty: raw.hpEmpty ?? DUNGEON.hpEmpty,
+      torchPole: raw.torchPole ?? DUNGEON.torchPole,
+      torchSconce: raw.torchSconce ?? DUNGEON.torchSconce,
+      particleHit: raw.particleHit,
+      particleScore: raw.particleScore,
+      dustColor: raw.dustColor,
+      monsters: Array.isArray(raw.monsters) && raw.monsters.length > 0 ? raw.monsters : undefined,
+      spriteOverrides: raw.spriteOverrides,
+    };
+    const i = THEMES.findIndex((t) => t.id === theme.id);
+    if (i >= 0) THEMES[i] = theme;
+    else THEMES.push(theme);
+  }
+}
+
+/**
+ * Fetch + register custom themes from the backend. Best-effort: on any failure
+ * the game proceeds with built-ins only.
+ */
+export async function loadCustomThemes(): Promise<void> {
+  try {
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem('arcade-token');
+    } catch {
+      token = null;
+    }
+    const res = await fetch('/api/themes', token ? { headers: { authorization: `Bearer ${token}` } } : undefined);
+    if (!res.ok) return;
+    const data = (await res.json()) as { themes?: ({ id: string; name: string; builtin?: boolean } & Partial<Theme>)[] };
+    if (Array.isArray(data.themes)) {
+      const custom = data.themes.filter((t) => t && !t.builtin && typeof t.id === 'string' && typeof t.name === 'string');
+      registerCustomThemes(custom as ({ id: string; name: string } & Partial<Theme>)[]);
+    }
+  } catch {
+    /* offline / not logged in — built-ins are enough */
+  }
+}
+
 /** Resolve a theme id (URL param / setting) with a safe fallback. */
 export function resolveTheme(id: string | null | undefined): Theme {
   if (!id) return DUNGEON;

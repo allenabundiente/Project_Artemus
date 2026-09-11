@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api';
 import type { FeatureRow, MapConfig, ShopItem, ThemeMeta } from '../types';
 import { spriteDataUrl } from '../game/sprites';
-import type { AnimDef } from '../api';
+import type { AnimDef, CustomThemePayload } from '../api';
 
-type Tab = 'features' | 'sprites' | 'animations' | 'map' | 'shop';
+type Tab = 'features' | 'sprites' | 'animations' | 'themes' | 'map' | 'shop';
 
 const FEATURES_HELP: Record<string, string> = {
   shop: 'The Royal Shop (players spend coins)',
@@ -310,6 +310,132 @@ function AnimationsTab() {
   );
 }
 
+// --- custom map themes ------------------------------------------------------------------
+
+const THEME_COLOR_FIELDS: { key: keyof CustomThemePayload; label: string; hint: string }[] = [
+  { key: 'sky', label: 'Sky', hint: 'Backdrop sky fill' },
+  { key: 'stars', label: 'Stars', hint: 'Star/firefly dots' },
+  { key: 'farHills', label: 'Far hills', hint: 'Distant silhouette layer' },
+  { key: 'nearHills', label: 'Near hills', hint: 'Near parallax layer' },
+  { key: 'pit', label: 'Pit', hint: 'Pit darkness' },
+  { key: 'floorTop', label: 'Floor lip', hint: '4px walkable floor top' },
+  { key: 'floorBody', label: 'Floor body', hint: 'Floor under the lip' },
+  { key: 'floorSpeckle', label: 'Speckles', hint: 'Floor texture dots' },
+  { key: 'hpFilled', label: 'HP filled', hint: 'Monster HP pip color' },
+  { key: 'hpEmpty', label: 'HP empty', hint: 'Lost HP pip color' },
+];
+
+const THEME_PRESETS: Record<string, Partial<CustomThemePayload>> = {
+  ember: { sky: '#2a0f0a', stars: '#ffb347', farHills: '#571c12', nearHills: '#3a1410', pit: '#000000', floorTop: '#8a4a2b', floorBody: '#40201a', floorSpeckle: '#5c2f24', hpFilled: '#a82a2a', hpEmpty: '#5c2f24', particleHit: '#ff7b39' },
+  frost: { sky: '#14202e', stars: '#d7ecff', farHills: '#2a4157', nearHills: '#3a5a73', pit: '#040a12', floorTop: '#7f93a8', floorBody: '#43525f', floorSpeckle: '#5a6b7a', hpFilled: '#a82a2a', hpEmpty: '#43525f', dustColor: 'rgba(210, 230, 250, 0.7)' },
+};
+
+function ThemesTab({ themes }: { themes: ThemeMeta[] }) {
+  const [id, setId] = useState('');
+  const [form, setForm] = useState<Partial<CustomThemePayload>>({ name: '', ...THEME_PRESETS.ember });
+  const [monsters, setMonsters] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const set = (patch: Partial<CustomThemePayload>) => setForm((f) => ({ ...f, ...patch }));
+
+  async function save() {
+    setNotice(null);
+    if (!id.trim() || !form.name?.trim()) {
+      setNotice('Theme id and display name are required.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload: CustomThemePayload = {
+        ...(THEME_PRESETS.ember as CustomThemePayload),
+        ...form,
+        monsters: monsters.split(',').map((s) => s.trim()).filter(Boolean),
+      } as CustomThemePayload;
+      await api.saveCustomTheme(id.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_'), payload);
+      setNotice(`Theme "${form.name}" saved — it is live in the theme picker and quest rotation.`);
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(themeId: string) {
+    if (!window.confirm(`Delete theme "${themeId}"? Quests using it fall back to the dungeon look.`)) return;
+    try {
+      await api.deleteCustomTheme(themeId);
+      setNotice(`Theme "${themeId}" deleted.`);
+    } catch (e) {
+      setNotice((e as Error).message);
+    }
+  }
+
+  const custom = themes.filter((t) => !t.builtin);
+
+  return (
+    <div className="pixel-panel">
+      <p className="pixel-font" style={{ fontSize: '0.75rem', margin: '0 0 0.25rem' }}>🗺 THEME FORGE</p>
+      <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0 0 0.75rem' }}>
+        Create new map looks (colors + which monsters patrol). Saved themes join the quest rotation,
+        the Map tab's fixed-theme picker, and teachers' guild skins — no redeploy needed.
+      </p>
+      {notice && <p className="status-text">{notice}</p>}
+
+      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: '0 0 0.4rem' }}>CUSTOM THEMES</p>
+      <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 1rem' }}>
+        {custom.map((t) => (
+          <li key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.35rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <span className="term-font" style={{ fontSize: '0.95rem' }}><strong>{t.name}</strong> · {t.id}</span>
+            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.55rem' }} onClick={() => void remove(t.id)}>✕</button>
+          </li>
+        ))}
+        {custom.length === 0 && <p className="status-text" style={{ margin: 0 }}>Only built-ins (dungeon, forest) so far.</p>}
+      </ul>
+
+      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: '0 0 0.4rem' }}>➕ CREATE / UPDATE</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <input className="pixel-input" placeholder="id (e.g. volcano)" value={id} onChange={(e) => setId(e.target.value)} style={{ width: 140 }} />
+        <input className="pixel-input" placeholder="Display name" value={form.name ?? ''} onChange={(e) => set({ name: e.target.value })} style={{ width: 170 }} />
+        <span className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)' }}>Preset:</span>
+        {Object.keys(THEME_PRESETS).map((p) => (
+          <button key={p} className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.55rem' }} onClick={() => set({ ...THEME_PRESETS[p] })}>{p}</button>
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.4rem', marginBottom: '0.5rem' }}>
+        {THEME_COLOR_FIELDS.map(({ key, label, hint }) => (
+          <label key={String(key)} className="term-font" style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }} title={hint}>
+            <input
+              type="color"
+              value={toHex(form[key] as string | undefined)}
+              onChange={(e) => set({ [key]: e.target.value } as Partial<CustomThemePayload>)}
+              style={{ width: 28, height: 24, padding: 0, border: '2px solid var(--d-darkwood)', background: 'none', cursor: 'pointer' }}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
+        <input className="pixel-input" placeholder="patrol monsters (comma-separated sprite slots, e.g. enemy_bat, dragon_flap)" value={monsters} onChange={(e) => setMonsters(e.target.value)} style={{ flex: 1, minWidth: 240 }} />
+        <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.65rem' }} onClick={() => void save()} disabled={busy || !id.trim() || !form.name?.trim()}>
+          {busy ? '…' : 'SAVE THEME'}
+        </button>
+      </div>
+      <p className="term-font" style={{ fontSize: '0.85rem', color: 'var(--d-stone-light)', margin: '0.5rem 0 0' }}>
+        Tip: reference animation clips from the Animations tab as patrol monsters — e.g.
+        <code> dragon_flap</code>. Test any theme live with <code>?theme=&lt;id&gt;</code> in the URL.
+      </p>
+    </div>
+  );
+}
+
+/** Best-effort hex conversion for <input type="color"> (defaults to black). */
+function toHex(v: string | undefined): string {
+  if (v && /^#[0-9a-fA-F]{6}$/.test(v)) return v;
+  if (v && /^#[0-9a-fA-F]{3}$/.test(v)) return `#${v[1]}${v[1]}${v[2]}${v[2]}${v[3]}${v[3]}`;
+  return '#000000';
+}
+
 // --- map config --------------------------------------------------------------------
 
 function MapTab({ themes }: { themes: ThemeMeta[] }) {
@@ -451,7 +577,7 @@ export default function AdminPanel({ onExit }: { onExit?: () => void }) {
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <div className="pixel-panel" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <p className="pixel-font" style={{ fontSize: '0.85rem', margin: '0.25rem 0.5rem 0 0', color: 'var(--d-gold)' }}>👑 ADMIN</p>
-        {(['features', 'sprites', 'animations', 'map', 'shop'] as Tab[]).map((t) => (
+        {(['features', 'sprites', 'animations', 'themes', 'map', 'shop'] as Tab[]).map((t) => (
           <button
             key={t}
             className={`pixel-btn ${tab === t ? 'pixel-btn--gold' : 'pixel-btn--ghost'}`}
@@ -470,6 +596,7 @@ export default function AdminPanel({ onExit }: { onExit?: () => void }) {
       {tab === 'features' && <FeaturesTab />}
       {tab === 'sprites' && <SpritesTab />}
       {tab === 'animations' && <AnimationsTab />}
+      {tab === 'themes' && <ThemesTab themes={themes} />}
       {tab === 'map' && <MapTab themes={themes} />}
       {tab === 'shop' && <ShopTab />}
     </div>

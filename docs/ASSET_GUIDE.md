@@ -173,6 +173,20 @@ name, same size — and it's a proper slot: preloadable, theme-swappable, docume
 
 ---
 
+## 5c. Recipe E — Custom map themes (admin, no code)
+
+Admins can forge **whole new map looks** without touching code: Admin → Themes
+("Theme Forge"). Pick a slug id, a display name, set the ten scene colors with
+the color pickers (ember/frost presets fill sensible palettes), optionally list
+which patrol monsters roam it (any sprite slot — including animation clips from
+the Animations tab), and save.
+
+Saved themes persist server-side, appear in the admin Map tab's fixed picker,
+in teachers' guild-skin pickers, and join the random-by-difficulty quest
+rotation. Preview any theme live with `?theme=<id>` in the URL.
+
+---
+
 ## 5b. Recipe D — Sprite animations (admin, no code)
 
 Admins can add **animated monsters** without touching code:

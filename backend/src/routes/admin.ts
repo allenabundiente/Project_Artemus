@@ -46,6 +46,74 @@ export function seedShop(): void {
   })();
 }
 
+// --- custom map themes ------------------------------------------------------------
+//
+// Admin-defined map themes (colors + optional sprite/monster swaps), stored in
+// backend/data/custom-themes.json and served through GET /api/themes. The
+// frontend registers them into its theme registry at quest start, so a new map
+// is playable everywhere without a redeploy. Built-in themes stay in
+// frontend/src/game/themes.ts and cannot be overwritten from here.
+
+const THEMES_DIR = path.resolve(here, '../../data');
+const THEMES_FILE = path.join(THEMES_DIR, 'custom-themes.json');
+
+const THEME_COLOR_RE = /^(#[0-9a-fA-F]{3,8}|rgba?\([\d.,\s]{1,40}\))$/;
+const THEME_COLORS_REQUIRED = ['sky', 'stars', 'farHills', 'nearHills', 'pit', 'floorTop', 'floorBody', 'floorSpeckle', 'hpFilled', 'hpEmpty'] as const;
+const THEME_COLORS_OPTIONAL = ['torchPole', 'torchSconce', 'particleHit', 'particleScore', 'dustColor'] as const;
+
+export interface CustomThemeRecord {
+  id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
+function readCustomThemes(): CustomThemeRecord[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(THEMES_FILE, 'utf8'));
+    return Array.isArray(parsed) ? (parsed as CustomThemeRecord[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCustomThemes(themes: CustomThemeRecord[]): void {
+  fs.mkdirSync(THEMES_DIR, { recursive: true });
+  fs.writeFileSync(THEMES_FILE, JSON.stringify(themes, null, 2) + '\n');
+}
+
+/** Exported for /api/themes + /api/map/resolve in api.ts. */
+export function listCustomThemes(): CustomThemeRecord[] {
+  return readCustomThemes();
+}
+
+/** Strict sanitization: slug id, short name, hex/rgba colors, safe sprite slots. */
+function sanitizeCustomTheme(id: string, b: Record<string, unknown>): CustomThemeRecord | { error: string } {
+  const name = typeof b.name === 'string' && b.name.trim().length > 0 ? b.name.trim().slice(0, 40) : null;
+  if (!name) return { error: 'name is required' };
+  const out: CustomThemeRecord = { id, name };
+  for (const k of THEME_COLORS_REQUIRED) {
+    const v = b[k];
+    if (typeof v !== 'string' || !THEME_COLOR_RE.test(v)) return { error: `color "${k}" must be a hex or rgba() string` };
+    out[k] = v.slice(0, 48);
+  }
+  for (const k of THEME_COLORS_OPTIONAL) {
+    const v = b[k];
+    if (typeof v === 'string' && THEME_COLOR_RE.test(v)) out[k] = v.slice(0, 48);
+  }
+  if (Array.isArray(b.monsters)) {
+    const monsters = b.monsters.filter((m): m is string => typeof m === 'string' && isSafeSlot(m)).slice(0, 8);
+    if (monsters.length > 0) out.monsters = monsters;
+  }
+  if (b.spriteOverrides && typeof b.spriteOverrides === 'object' && !Array.isArray(b.spriteOverrides)) {
+    const overrides: Record<string, string> = {};
+    for (const [slot, file] of Object.entries(b.spriteOverrides as Record<string, unknown>).slice(0, 16)) {
+      if (isSafeSlot(slot) && typeof file === 'string' && isSafeSlot(file)) overrides[slot] = file;
+    }
+    if (Object.keys(overrides).length > 0) out.spriteOverrides = overrides;
+  }
+  return out;
+}
+
 export function registerAdminRoutes(router: Router): void {
   seedShop();
 
@@ -186,6 +254,45 @@ export function registerAdminRoutes(router: Router): void {
       const next = anims.filter((a) => a.name !== name);
       if (next.length === anims.length) return res.status(404).json({ error: 'Unknown animation' });
       writeAnims(next);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  // --- admin: custom map themes ------------------------------------------------------
+
+  router.put('/admin/themes/:id', requireAdmin, async (req, res) => {
+    const id = String(req.params.id);
+    if (!/^[a-z0-9_-]{1,32}$/.test(id)) return res.status(400).json({ error: 'Invalid theme id (lowercase slug)' });
+    if (['dungeon', 'forest'].includes(id)) return res.status(400).json({ error: 'Built-in themes cannot be replaced' });
+    const sanitized = sanitizeCustomTheme(id, (req.body ?? {}) as Record<string, unknown>);
+    if ('error' in sanitized) return res.status(400).json({ error: sanitized.error });
+    try {
+      const themes = readCustomThemes();
+      const i = themes.findIndex((t) => t.id === id);
+      if (i >= 0) themes[i] = sanitized;
+      else themes.push(sanitized);
+      writeCustomThemes(themes);
+      res.json({ ok: true, theme: sanitized });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  router.delete('/admin/themes/:id', requireAdmin, async (req, res) => {
+    const id = String(req.params.id);
+    if (!/^[a-z0-9_-]{1,32}$/.test(id)) return res.status(400).json({ error: 'Invalid theme id' });
+    try {
+      const themes = readCustomThemes();
+      const next = themes.filter((t) => t.id !== id);
+      if (next.length === themes.length) return res.status(404).json({ error: 'Unknown theme' });
+      writeCustomThemes(next);
+      // If the global map config pins the deleted theme, fall back to dungeon.
+      const cfg = await getGlobalMapConfig();
+      if (cfg.fixedTheme === id && cfg.mode === 'fixed') {
+        await setGlobalMapConfig({ mode: 'fixed', fixedTheme: 'dungeon' });
+      }
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });

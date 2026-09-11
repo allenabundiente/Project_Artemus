@@ -52,7 +52,8 @@ timer per term settings · 🔊 toggles chiptune SFX · CRT toggle for scanlines
   role middleware, Anthropic Messages API client (server-side only) with schema
   validation + one strict retry, offline heuristic generator fallback.
 - **Frontend**: React + TypeScript + Vite, plain Canvas 2D engine (rAF loop with a
-  timer fallback for occluded windows), medieval 21-color palette, "Press Start 2P" +
+  timer fallback for occluded windows) rendering a 320×180 world onto a 640×360
+  backing canvas with 2×-detail 32×32 sprites, medieval palette, "Press Start 2P" +
   VT323 fonts, CRT scanline overlay, WebAudio chiptune SFX (no audio files).
 
 ## Database (Supabase)
@@ -128,7 +129,9 @@ as the owning teacher/student).
 ## Swapping in real pixel art
 
 Sprite grids live in `frontend/src/game/spriteGrids.ts` and render to
-`frontend/public/sprites/*.png` via `npm run sprites` (frontend). Drop in real PNGs with
+`frontend/public/sprites/*.png` via `npm run sprites` (frontend). Player and monster
+art is 32×32 (8 hero poses incl. a 4-frame run cycle and hurt/death); check
+`public/sprites/manifest.json` for each slot's size. Drop in real PNGs with
 the same filenames (`player_idle.png`, `enemy_goblin.png`, `boss.png`,
 `castle_gate.png`, `badge_gold.png`, …) and they load automatically; the runtime falls
 back to rasterizing the grids if a file is missing.

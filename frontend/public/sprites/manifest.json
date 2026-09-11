@@ -1,57 +1,77 @@
 {
   "player_idle": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "player_run1": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "player_run2": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
+    "gridFallback": true
+  },
+  "player_run3": {
+    "width": 32,
+    "height": 32,
+    "gridFallback": true
+  },
+  "player_run4": {
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "player_jump": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
+    "gridFallback": true
+  },
+  "player_hurt": {
+    "width": 32,
+    "height": 32,
+    "gridFallback": true
+  },
+  "player_dead": {
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "enemy_goblin": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "enemy_slime": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "enemy_bat": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "enemy_bug": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "boss": {
-    "width": 24,
-    "height": 24,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "bookworm": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "bookworm_hurt": {
-    "width": 16,
-    "height": 16,
+    "width": 32,
+    "height": 32,
     "gridFallback": true
   },
   "chest": {
@@ -129,7 +149,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_hair_short_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_hair_short_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -149,7 +189,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_hair_short_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_hair_short_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_short_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -169,7 +229,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_hair_long_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_hair_long_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -189,7 +269,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_hair_long_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_hair_long_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_long_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -209,7 +309,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_hair_topknot_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_hair_topknot_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -229,7 +349,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_hair_topknot_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_hair_topknot_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_hair_topknot_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -249,7 +389,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_helmet_kettle_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_helmet_kettle_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -269,7 +429,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_helmet_kettle_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_helmet_kettle_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_kettle_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -289,7 +469,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_helmet_great_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_helmet_great_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -309,7 +509,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_helmet_great_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_helmet_great_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_helmet_great_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -329,7 +549,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_armor_tunic_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_armor_tunic_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -349,7 +589,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_armor_tunic_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_armor_tunic_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_tunic_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -369,7 +629,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_armor_leather_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_armor_leather_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -389,7 +669,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_armor_leather_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_armor_leather_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_leather_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -409,7 +709,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_armor_plate_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_armor_plate_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -429,7 +749,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_armor_plate_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_armor_plate_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_armor_plate_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -449,7 +789,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_cape_cloth_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_cape_cloth_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -469,7 +829,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_cape_cloth_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_cape_cloth_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_cloth_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -489,7 +869,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_cape_silk_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_cape_silk_male_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_male_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -509,7 +909,27 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_cape_silk_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_cape_silk_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_cape_silk_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true
@@ -544,12 +964,52 @@
     "height": 16,
     "gridFallback": true
   },
+  "avatar_body_male_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_run3": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_male_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_run4": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
   "avatar_body_male_jump": {
     "width": 16,
     "height": 16,
     "gridFallback": true
   },
   "avatar_body_female_jump": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_male_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_hurt": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_male_dead": {
+    "width": 16,
+    "height": 16,
+    "gridFallback": true
+  },
+  "avatar_body_female_dead": {
     "width": 16,
     "height": 16,
     "gridFallback": true

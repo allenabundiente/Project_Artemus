@@ -422,7 +422,7 @@ canvas {
 /* Canvas scaling: crisp pixels, integer scaling */
 #game-canvas {
   width: min(100%, 960px);
-  aspect-ratio: 320 / 180;
+  aspect-ratio: 640 / 360;
   image-rendering: pixelated;
   background: var(--d-dungeon);
   border: 4px solid var(--d-black);

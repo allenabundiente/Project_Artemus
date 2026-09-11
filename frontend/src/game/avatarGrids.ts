@@ -20,7 +20,7 @@
 
 import type { SpriteDef } from './spriteGrids.js';
 
-const FRAMES = ['idle', 'run1', 'run2', 'jump'] as const;
+const FRAMES = ['idle', 'run1', 'run2', 'run3', 'run4', 'jump', 'hurt', 'dead'] as const;
 
 // --- canonical body bases (16 rows: rows 0–7 head, 8–15 torso) ----------------
 
@@ -105,14 +105,55 @@ const F_TORSO_JUMP = [
   '...kk.....kk....',
 ];
 
+// Hurt: recoiling — arms flung back, legs braced wide.
+const M_TORSO_HURT = [
+  '....kkkkkkk.....',
+  '...kHHHHHHHk....',
+  '..kSkHHHHHkSk...',
+  '..kSkHHHHHkSk...',
+  '....kHHHHHk.....',
+  '...kSk...kSk....',
+  '..kSk.....kSk...',
+  '..kk.......kk...',
+];
+
+const F_TORSO_HURT = [
+  '....kkkkkkk.....',
+  '...kHHHHHHHk....',
+  '.kSkkHHHHHkkSk..',
+  '.kSkkHHHHHkkSk..',
+  '....kHHHHHk.....',
+  '...kSk...kSk....',
+  '..kSk.....kSk...',
+  '..kk.......kk...',
+];
+
+// Dead: collapsed — legs folded under, body slumped low.
+const M_TORSO_DEAD = [
+  '....kkkkkkk.....',
+  '...kHHHHHHHk....',
+  '...kHkHHHkHk....',
+  '...kHkHHHkHk....',
+  '...kHHHHHHHk....',
+  '..kHHHHHHHHHk...',
+  '..kSk.....kSk...',
+  '..kk.......kk...',
+];
+
+const F_TORSO_DEAD = M_TORSO_DEAD;
+
 function torsoFor(sex: 'male' | 'female', frame: string): string[] {
   if (sex === 'male') {
-    if (frame === 'run1' || frame === 'run2') return M_TORSO_RUN;
+    if (frame === 'run1' || frame === 'run2' || frame === 'run3' || frame === 'run4') return M_TORSO_RUN;
     if (frame === 'jump') return M_TORSO_JUMP;
+    if (frame === 'hurt') return M_TORSO_HURT;
+    if (frame === 'dead') return M_TORSO_DEAD;
     return M_TORSO_IDLE;
   }
-  if (frame === 'run1' || frame === 'run2') return F_TORSO_RUN;
+  if (frame === 'run1' || frame === 'run2' || frame === 'run3' || frame === 'run4') return F_TORSO_RUN;
   if (frame === 'jump') return F_TORSO_JUMP;
+  if (frame === 'hurt') return F_TORSO_HURT;
+  if (frame === 'dead') return F_TORSO_DEAD;
   return F_TORSO_IDLE;
 }
 

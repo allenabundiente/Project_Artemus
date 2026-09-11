@@ -7,8 +7,7 @@ breaking the game. Written for friends contributing art; no engine knowledge req
 
 ## 1. The mental model (read this first)
 
-The game renders a tiny **320×180 pixel world** on a canvas and scales it up with
-`image-rendering: pixelated` — so every asset is small pixel art, and every piece of
+The game simulates a tiny **320×180 pixel world**, drawn onto a **640×360 canvas** (2× backing scale, nearest-neighbor) and scaled up with `image-rendering: pixelated` — so player/monster art is authored at 32×32 for crisp extra detail while the physics grid stays 16px-class. Every piece of
 art has a **safety net**:
 
 ```
@@ -46,10 +45,9 @@ Current slots:
 
 | Slot | Size | What it is |
 |---|---|---|
-| `player_idle`, `player_run1`, `player_run2`, `player_jump` | 16×16 | The hero's 4 animation frames |
-| `enemy_goblin`, `enemy_slime`, `enemy_bat`, `enemy_bug` | 16×16 | Patrol monsters (cycle by level position) |
-| `boss` | 24×24 | Boss battle sprite |
-| `bookworm`, `bookworm_hurt` | 16×16 | Boss battle alt sprites |
+| `player_idle`, `player_run1`–`player_run4`, `player_jump`, `player_hurt`, `player_dead` | 32×32 | The hero's 8 poses: 4-frame run cycle + jump, hurt, death |
+| `enemy_goblin`, `enemy_slime`, `enemy_bat`, `enemy_bug` | 32×32 | Patrol monsters (cycle by level position) |
+| `boss`, `bookworm`, `bookworm_hurt` | 32×32 | Boss battle sprites |
 | `castle_gate`, `flag`, `gate_open`, `gate_locked` | 16×24 | Level exit markers |
 | `chest`, `coin`, `torch` | 16×16 / 13×12 / 12×10 | Pickups & décor |
 | `heart`, `heart_empty` | 12×9 | HUD lives |

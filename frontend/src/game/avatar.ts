@@ -16,7 +16,7 @@ export interface AvatarConfig {
   color: string;
 }
 
-const ANIM_FRAMES = ['idle', 'run1', 'run2', 'jump'] as const;
+const ANIM_FRAMES = ['idle', 'run1', 'run2', 'run3', 'run4', 'jump', 'hurt', 'dead'] as const;
 export type AvatarFrame = (typeof ANIM_FRAMES)[number];
 
 function hexToRgb(hex: string): [number, number, number] {

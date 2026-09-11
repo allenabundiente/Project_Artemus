@@ -19,7 +19,7 @@ function AvatarPreview({ avatar, size = 64 }: { avatar: AvatarConfig; size?: num
     api.getWardrobe().catch(() => null);
     import('../game/sprites').then((m) => m.loadSprites()).then((s) => { if (!cancelled) setSprites(s); });
     const t = window.setInterval(() => {
-      setFrame((f) => (f === 'idle' ? 'run1' : f === 'run1' ? 'run2' : 'idle'));
+      setFrame((f) => (f === 'idle' ? 'run1' : f === 'run1' ? 'run2' : f === 'run2' ? 'run3' : f === 'run3' ? 'run4' : 'idle'));
     }, 350);
     return () => { cancelled = true; window.clearInterval(t); };
   }, []);

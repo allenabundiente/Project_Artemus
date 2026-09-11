@@ -119,7 +119,7 @@ export default function Wardrobe({ initial, onSaved }: Props) {
 
   useEffect(() => {
     const t = window.setInterval(() => {
-      setFrame((f) => (f === 'idle' ? 'run1' : f === 'run1' ? 'run2' : 'idle'));
+      setFrame((f) => (f === 'idle' ? 'run1' : f === 'run1' ? 'run2' : f === 'run2' ? 'run3' : f === 'run3' ? 'run4' : 'idle'));
     }, 350);
     return () => window.clearInterval(t);
   }, []);

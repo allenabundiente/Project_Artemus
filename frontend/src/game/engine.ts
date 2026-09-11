@@ -5,6 +5,10 @@ import { composeAvatar, type AvatarConfig, type AvatarFrame } from './avatar';
 
 export const VIRTUAL_W = 320;
 export const VIRTUAL_H = 180;
+/** Canvas backing-store scale: 2 → 640×360 backing for crisper scaled art. */
+export const RENDER_SCALE = 2;
+export const BACKING_W = VIRTUAL_W * RENDER_SCALE;
+export const BACKING_H = VIRTUAL_H * RENDER_SCALE;
 
 export interface Monster {
   x: number;
@@ -73,6 +77,10 @@ export class ArcadeEngine {
   private facing: 1 | -1 = 1;
   private invuln = 0;
   private animT = 0;
+  /** Time left showing the hurt pose after a hit (0 = not hurt). */
+  private hurtT = 0;
+  /** True once the run is lost — holds the death pose on screen. */
+  private deadPose = false;
   private running = false;
   private paused = false;
   private lastT = 0;
@@ -108,6 +116,12 @@ export class ArcadeEngine {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
     this.layout = layout;
+    // 640×360 backing store; all game code keeps drawing in 320×180 units and
+    // the 2× transform crisply doubles every pixel (smoothing stays off).
+    canvas.width = VIRTUAL_W * RENDER_SCALE;
+    canvas.height = VIRTUAL_H * RENDER_SCALE;
+    this.ctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
+    this.ctx.imageSmoothingEnabled = false;
     this.cb = cb;
     this.theme = resolveTheme(themeId);
     // Apply the theme's sprite overrides, then keep every other slot from the
@@ -183,6 +197,8 @@ export class ArcadeEngine {
     this.vy = 0;
     this.onGround = true;
     this.invuln = 1.2;
+    this.hurtT = 0;
+    this.deadPose = false;
     this.collected.clear();
     this.defeated.clear();
     this.levelDone = false;
@@ -305,6 +321,7 @@ export class ArcadeEngine {
     }
 
     if (this.invuln > 0) this.invuln -= dt;
+    if (this.hurtT > 0) this.hurtT -= dt;
     this.animT += dt;
 
     const playerCx = this.px + PLAYER_W / 2;
@@ -388,7 +405,10 @@ export class ArcadeEngine {
     this.onGround = false;
     if (this.lives <= 0) {
       this.levelDone = true;
+      this.deadPose = true;
       this.cb.onGameOver();
+    } else {
+      this.hurtT = 0.45; // recoil knockback shows the hurt pose
     }
   }
 
@@ -423,6 +443,11 @@ export class ArcadeEngine {
 
   // --- rendering --------------------------------------------------------------
 
+  /** Hurt/death poses always render — the invulnerability blink must not hide them. */
+  private get showPoseOverride(): boolean {
+    return this.deadPose || this.hurtT > 0;
+  }
+
   private drawSprite(name: string, x: number, y: number): void {
     const img = this.sprites[name];
     if (img && img.complete) {
@@ -436,6 +461,7 @@ export class ArcadeEngine {
   private render(): void {
     const c = this.ctx;
     const th = this.theme;
+    c.imageSmoothingEnabled = false;
     // sky
     c.fillStyle = th.sky;
     c.fillRect(0, 0, VIRTUAL_W, VIRTUAL_H);
@@ -542,13 +568,14 @@ export class ArcadeEngine {
     this.drawSprite('castle_gate', this.layout.flagX - this.camX, groundTop - 24);
 
     // player — wardrobe-composited avatar when configured, classic hero otherwise
-    if (this.invuln <= 0 || Math.floor(this.time * 12) % 2 === 0) {
-      const animFrame: AvatarFrame = !this.onGround ? 'jump' : !this.input.left && !this.input.right ? 'idle' : Math.floor(this.animT * 8) % 2 === 0 ? 'run1' : 'run2';
+    const showPose = this.deadPose ? 'dead' : this.hurtT > 0 ? 'hurt' : null;
+    if (this.invuln <= 0 || this.showPoseOverride || Math.floor(this.time * 12) % 2 === 0) {
+      const animFrame: AvatarFrame = showPose ?? (!this.onGround ? 'jump' : !this.input.left && !this.input.right ? 'idle' : (['run1', 'run2', 'run3', 'run4'] as const)[Math.floor(this.animT * 10) % 4]);
       if (this.avatar) {
         const composed = composeAvatar(animFrame, this.avatar, this.sprites);
         c.drawImage(composed, Math.round(this.px - this.camX), Math.round(this.py));
       } else {
-        const frame = !this.onGround ? 'player_jump' : this.animState();
+        const frame = showPose === 'dead' ? 'player_dead' : showPose === 'hurt' ? 'player_hurt' : !this.onGround ? 'player_jump' : this.animState();
         this.drawSprite(frame, this.px - this.camX, this.py);
       }
     }
@@ -566,7 +593,7 @@ export class ArcadeEngine {
   private animState(): string {
     const moving = this.input.left || this.input.right;
     if (!moving) return 'player_idle';
-    return Math.floor(this.animT * 8) % 2 === 0 ? 'player_run1' : 'player_run2';
+    return ['player_run1', 'player_run2', 'player_run3', 'player_run4'][Math.floor(this.animT * 10) % 4];
   }
 }
 

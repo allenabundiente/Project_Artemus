@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AvatarPrefs, ScoreResultResponse, Term } from '../types';
 import * as api from '../api';
-import { ArcadeEngine, buildLayout } from '../game/engine';
+import { ArcadeEngine, buildLayout, BACKING_W, BACKING_H } from '../game/engine';
 import { loadSprites, spriteDataUrl } from '../game/sprites';
 import { sfx } from '../game/sfx';
 import BattleScreen from './BattleScreen';
@@ -77,8 +77,8 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         if (cancelled) return;
         const layout = buildLayout(chapterId, challenges);
         const canvas = canvasRef.current!;
-        canvas.width = 320;
-        canvas.height = 180;
+        canvas.width = BACKING_W;
+        canvas.height = BACKING_H;
         startedAtRef.current = Date.now();
         // Map look: teacher's guild skin → admin config → random-by-difficulty.
         // /?theme=<id> still wins for testing (see game/themes.ts). The player's

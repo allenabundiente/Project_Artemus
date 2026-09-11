@@ -2,6 +2,7 @@ import type { Challenge } from '../types';
 import { sfx } from './sfx';
 import { resolveTheme, type Theme } from './themes';
 import { composeAvatar, type AvatarConfig, type AvatarFrame } from './avatar';
+import type { SpriteAnimation } from './animations';
 
 export const VIRTUAL_W = 320;
 export const VIRTUAL_H = 180;
@@ -50,6 +51,10 @@ interface Particle {
   life: number;
   maxLife: number;
   color: string;
+  /** Puff rendering flag (grows + fades); absent = classic 2px spark. */
+  puff?: boolean;
+  /** Puff start radius. */
+  r?: number;
 }
 
 const GRAVITY = 620; // px/s^2
@@ -65,6 +70,10 @@ export class ArcadeEngine {
   private layout: LevelLayout;
   private sprites: Record<string, HTMLImageElement>;
   private theme: Theme;
+  /** Registered animation clips (admin-managed), keyed by clip name. */
+  private animations: Map<string, SpriteAnimation> = new Map();
+  /** Monster index → clip name, resolved from the roster at construction. */
+  private monsterAnims: (string | null)[] = [];
   /** Player customization (wardrobe); undefined = classic hero sprite. */
   private avatar?: AvatarConfig;
   private monsterSprites: string[];
@@ -81,6 +90,8 @@ export class ArcadeEngine {
   private hurtT = 0;
   /** True once the run is lost — holds the death pose on screen. */
   private deadPose = false;
+  /** Which run-cycle frame index was last drawn — footfall = stride-beat changes. */
+  private lastRunFrame = -1;
   private running = false;
   private paused = false;
   private lastT = 0;
@@ -112,6 +123,7 @@ export class ArcadeEngine {
     cb: EngineCallbacks,
     themeId?: string,
     avatar?: AvatarConfig,
+    animations?: SpriteAnimation[],
   ) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d')!;
@@ -134,6 +146,16 @@ export class ArcadeEngine {
     this.sprites = merged;
     this.monsterSprites = this.theme.monsters ?? ['enemy_goblin', 'enemy_slime', 'enemy_bat'];
     this.avatar = avatar;
+    // Register animation clips. A clip whose name matches a monster sprite
+    // slot (e.g. 'dragon_flap' for slot 'dragon_flap') plays on the monsters
+    // that use that slot; clips are picked in roster order like sprite slots.
+    for (const anim of animations ?? []) this.animations.set(anim.name, anim);
+    const clipNames = [...this.animations.keys()];
+    this.monsterAnims = this.layout.monsters.map((_m, i) => {
+      const slot = this.monsterSprites[i % this.monsterSprites.length];
+      const match = clipNames.find((n) => n === slot || slot.startsWith(n));
+      return match ?? null;
+    });
     this.py = layout.groundY - PLAYER_H;
     this.bugDirs = layout.monsters.map(() => (Math.random() < 0.5 ? 1 : -1) as 1 | -1);
   }
@@ -324,6 +346,18 @@ export class ArcadeEngine {
     if (this.hurtT > 0) this.hurtT -= dt;
     this.animT += dt;
 
+    // Run-cycle footfalls: emit a dust puff each time the cycle wraps past a
+    // stride beat (frame 1 and frame 3 boundaries).
+    if (this.onGround && this.input.left !== this.input.right && this.hurtT <= 0) {
+      const frameIdx = Math.floor(this.animT * 10) % 4;
+      if ((frameIdx === 1 || frameIdx === 3) && this.lastRunFrame !== frameIdx) {
+        this.dustPuff();
+      }
+      this.lastRunFrame = frameIdx;
+    } else {
+      this.lastRunFrame = -1;
+    }
+
     const playerCx = this.px + PLAYER_W / 2;
     const playerCy = this.py + PLAYER_H / 2;
 
@@ -441,12 +475,71 @@ export class ArcadeEngine {
     }
   }
 
+  /** Soft dust puff kicked up under the player's feet on a run footfall. */
+  private dustPuff(): void {
+    const footY = this.layout.groundY;
+    for (let i = 0; i < 3; i++) {
+      const dir = i === 0 ? -1 : i === 1 ? 1 : 0;
+      this.particles.push({
+        x: this.px + PLAYER_W / 2 + dir * 3 + (Math.random() * 2 - 1),
+        y: footY - 1,
+        vx: dir * (10 + Math.random() * 14),
+        vy: -(6 + Math.random() * 10),
+        life: 0.35 + Math.random() * 0.2,
+        maxLife: 0.55,
+        color: this.theme.dustColor ?? 'rgba(196, 178, 152, 0.7)',
+        puff: true,
+        r: 1 + Math.random() * 1.5,
+      });
+    }
+  }
+
   // --- rendering --------------------------------------------------------------
 
   /** Hurt/death poses always render — the invulnerability blink must not hide them. */
   private get showPoseOverride(): boolean {
     return this.deadPose || this.hurtT > 0;
   }
+
+  /** Draw the player with a red hit-flash overlay while the hurt pose plays. */
+  private drawPlayerTinted(name: string, x: number, y: number): void {
+    const img = this.sprites[name];
+    const flashing = this.hurtT > 0 && !this.deadPose;
+    if (!img || !img.complete) {
+      this.drawSprite(name, x, y);
+      return;
+    }
+    if (!flashing) {
+      this.ctx.drawImage(img, Math.round(x), Math.round(y));
+      return;
+    }
+    // Damage flash: the sprite plus a red silhouette at half-strength,
+ // pulsing between 0.25 and 0.5 alpha at ~16 Hz.
+    const c = this.ctx;
+    c.save();
+    c.drawImage(img, Math.round(x), Math.round(y));
+    const tintCanvas = this.tintCanvas;
+    if (tintCanvas.width !== img.width || tintCanvas.height !== img.height) {
+      tintCanvas.width = img.width;
+      tintCanvas.height = img.height;
+    }
+    const tctx = tintCanvas.getContext('2d')!;
+    tctx.clearRect(0, 0, tintCanvas.width, tintCanvas.height);
+    tctx.globalCompositeOperation = 'source-over';
+    tctx.drawImage(img, 0, 0);
+    tctx.globalCompositeOperation = 'source-in';
+    tctx.fillStyle = '#ff004d';
+    tctx.fillRect(0, 0, tintCanvas.width, tintCanvas.height);
+    tctx.globalCompositeOperation = 'source-over';
+    const pulse = 0.25 + 0.25 * (Math.sin(this.time * 100) > 0 ? 1 : 0);
+    c.globalAlpha = pulse;
+    c.drawImage(tintCanvas, Math.round(x), Math.round(y));
+    c.globalAlpha = 1;
+    c.restore();
+  }
+
+  /** Scratch canvas reused for the hurt-pose red silhouette. */
+  private tintCanvas: HTMLCanvasElement = document.createElement('canvas');
 
   private drawSprite(name: string, x: number, y: number): void {
     const img = this.sprites[name];
@@ -524,14 +617,40 @@ export class ArcadeEngine {
       c.fillRect(x + 1, y + 2, 2, 6);
     }
 
-    // monsters (theme's patrol roster, cycling by index) with hp pips, gentle bob
+    // monsters (theme's patrol roster, cycling by index) with hp pips, gentle bob.
+    // A monster whose slot matches a registered animation clip plays the clip
+    // instead of a static PNG (admin-managed via the Animations manager).
     for (let i = 0; i < this.layout.monsters.length; i++) {
       if (this.defeated.has(i)) continue;
       const m = this.layout.monsters[i];
-      const bob = Math.round(Math.sin(this.time * 3 + i) * 2);
+      const slot = this.monsterSprites[i % this.monsterSprites.length];
       const mx = Math.round(m.x - 8 - this.camX);
-      const my = groundTop - 16 + bob;
-      this.drawSprite(this.monsterSprites[i % this.monsterSprites.length], mx, my);
+      const bob = Math.round(Math.sin(this.time * 3 + i) * 2);
+      const animName = this.monsterAnims[i];
+      let my: number;
+      if (animName) {
+        // Animated monster: frame steps at the clip's fps; the sprite itself
+        // carries the motion, so the sine bob is replaced by a tiny hop on
+        // every loop wrap for a lively cadence.
+        const anim = this.animations.get(animName)!;
+        const t = this.time * anim.fps;
+        const fi = anim.loop
+          ? Math.floor(t) % anim.frames.length
+          : Math.min(Math.floor(t), anim.frames.length - 1);
+        const wrapPhase = t % anim.frames.length;
+        const hop = anim.loop && wrapPhase < 1 ? -1 : 0;
+        my = groundTop - 16 + hop;
+        const frameName = anim.frames[fi];
+        const img = this.sprites[frameName];
+        if (img && img.complete) {
+          c.drawImage(img, mx, Math.round(my));
+        } else {
+          this.drawSprite(slot, mx, my); // frames missing → static fallback
+        }
+      } else {
+        my = groundTop - 16 + bob;
+        this.drawSprite(slot, mx, my);
+      }
       // hp pips
       for (let h = 0; h < m.maxHp; h++) {
         c.fillStyle = h < m.hp - 0 ? th.hpFilled : th.hpEmpty;
@@ -556,7 +675,8 @@ export class ArcadeEngine {
         c.fillRect(sx + 3, groundTop - 66, 6, 3);
         const img = this.sprites['torch'];
         if (img && img.complete) {
-          this.ctx.drawImage(img, sx, Math.round(groundTop - 74 + flicker * 0.3));
+          // 24×20 torch: flame tip up top, handle ending at the sconce cup.
+          this.ctx.drawImage(img, sx - 7, Math.round(groundTop - 84 + flicker * 0.3));
         } else {
           c.fillStyle = '#ffa13d';
           c.fillRect(sx + 3, Math.round(groundTop - 74 + flicker), 5, 6);
@@ -564,28 +684,61 @@ export class ArcadeEngine {
       }
     }
 
-    // castle gate (quest end)
-    this.drawSprite('castle_gate', this.layout.flagX - this.camX, groundTop - 24);
+    // castle gate (quest end) — 48px-tall keep rises from the floor
+    this.drawSprite('castle_gate', this.layout.flagX - this.camX, groundTop - 48);
 
     // player — wardrobe-composited avatar when configured, classic hero otherwise
     const showPose = this.deadPose ? 'dead' : this.hurtT > 0 ? 'hurt' : null;
+    const flashing = this.hurtT > 0 && !this.deadPose;
     if (this.invuln <= 0 || this.showPoseOverride || Math.floor(this.time * 12) % 2 === 0) {
       const animFrame: AvatarFrame = showPose ?? (!this.onGround ? 'jump' : !this.input.left && !this.input.right ? 'idle' : (['run1', 'run2', 'run3', 'run4'] as const)[Math.floor(this.animT * 10) % 4]);
       if (this.avatar) {
         const composed = composeAvatar(animFrame, this.avatar, this.sprites);
-        c.drawImage(composed, Math.round(this.px - this.camX), Math.round(this.py));
+        const sx = Math.round(this.px - this.camX);
+        const sy = Math.round(this.py);
+        if (flashing) {
+          // Red hit-flash on the composed avatar: silhouette the fresh canvas.
+          const tcv = this.tintCanvas;
+          if (tcv.width !== composed.width || tcv.height !== composed.height) {
+            tcv.width = composed.width;
+            tcv.height = composed.height;
+          }
+          const tctx = tcv.getContext('2d')!;
+          tctx.globalCompositeOperation = 'source-over';
+          tctx.clearRect(0, 0, tcv.width, tcv.height);
+          tctx.drawImage(composed, 0, 0);
+          tctx.globalCompositeOperation = 'source-in';
+          tctx.fillStyle = '#ff004d';
+          tctx.fillRect(0, 0, tcv.width, tcv.height);
+          tctx.globalCompositeOperation = 'source-over';
+          c.drawImage(composed, sx, sy);
+          c.globalAlpha = Math.sin(this.time * 100) > 0 ? 0.5 : 0.25;
+          c.drawImage(tcv, sx, sy);
+          c.globalAlpha = 1;
+        } else {
+          c.drawImage(composed, sx, sy);
+        }
       } else {
         const frame = showPose === 'dead' ? 'player_dead' : showPose === 'hurt' ? 'player_hurt' : !this.onGround ? 'player_jump' : this.animState();
-        this.drawSprite(frame, this.px - this.camX, this.py);
+        this.drawPlayerTinted(frame, this.px - this.camX, this.py);
       }
     }
 
-    // particles
+    // particles (classic sparks + soft dust puffs)
     for (const p of this.particles) {
       const alpha = Math.max(0, p.life / p.maxLife);
-      c.globalAlpha = alpha;
-      c.fillStyle = p.color;
-      c.fillRect(Math.round(p.x - this.camX), Math.round(p.y), 2, 2);
+      if (p.puff) {
+        c.globalAlpha = alpha * 0.8;
+        c.fillStyle = p.color;
+        const r = (p.r ?? 1.5) * (1 + (1 - alpha) * 1.8);
+        c.beginPath();
+        c.arc(Math.round(p.x - this.camX), Math.round(p.y), r, 0, Math.PI * 2);
+        c.fill();
+      } else {
+        c.globalAlpha = alpha;
+        c.fillStyle = p.color;
+        c.fillRect(Math.round(p.x - this.camX), Math.round(p.y), 2, 2);
+      }
     }
     c.globalAlpha = 1;
   }

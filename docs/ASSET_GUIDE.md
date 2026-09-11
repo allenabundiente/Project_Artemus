@@ -48,8 +48,8 @@ Current slots:
 | `player_idle`, `player_run1`–`player_run4`, `player_jump`, `player_hurt`, `player_dead` | 32×32 | The hero's 8 poses: 4-frame run cycle + jump, hurt, death |
 | `enemy_goblin`, `enemy_slime`, `enemy_bat`, `enemy_bug` | 32×32 | Patrol monsters (cycle by level position) |
 | `boss`, `bookworm`, `bookworm_hurt` | 32×32 | Boss battle sprites |
-| `castle_gate`, `flag`, `gate_open`, `gate_locked` | 16×24 | Level exit markers |
-| `chest`, `coin`, `torch` | 16×16 / 13×12 / 12×10 | Pickups & décor |
+| `castle_gate`, `flag` | 32×48 / 16×24 | Level exit markers |
+| `chest`, `coin`, `torch` | 32×32 / 26×24 / 26×20 | Pickups & décor |
 | `heart`, `heart_empty` | 12×9 | HUD lives |
 | `badge_*` (copper/iron/gold/diamond/mythril) | 12×11 | Rank badges (leaderboard) |
 
@@ -170,6 +170,25 @@ name, same size — and it's a proper slot: preloadable, theme-swappable, docume
 - UI art (portraits, banners) → just drop the PNG in `public/sprites/` (or
   `public/`) and use `<img src="/sprites/your_art.png">` with
   `imageRendering: 'pixelated'` — no engine involvement.
+
+---
+
+## 5b. Recipe D — Sprite animations (admin, no code)
+
+Admins can add **animated monsters** without touching code:
+
+1. **Upload frames** — Admin → Sprites: upload PNGs named with a shared base and
+   trailing frame number, e.g. `dragon_flap1.png`, `dragon_flap2.png`, `dragon_flap3.png`.
+2. **Register the clip** — Admin → Animations: quick-pick the `dragon_flap` group
+   (or hand-pick frames), set fps, and register. Clips persist in
+   `public/sprites/animations.json`.
+3. **Where it plays** — a clip plays on any patrol monster whose sprite slot
+   matches the clip name or starts with it (slot `dragon_flap` → clip
+   `dragon_flap`). Name a frame set after an existing slot (e.g. `enemy_goblin1/2`)
+   to re-animate stock monsters.
+
+Animated monsters drop the sine bob (the art carries the motion) and get a tiny
+hop on each loop wrap. Missing/corrupt frames fall back to the slot's static PNG.
 
 ---
 

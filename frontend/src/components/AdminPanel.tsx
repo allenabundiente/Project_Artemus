@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api';
 import type { FeatureRow, MapConfig, ShopItem, ThemeMeta } from '../types';
 import { spriteDataUrl } from '../game/sprites';
+import type { AnimDef } from '../api';
 
-type Tab = 'features' | 'sprites' | 'map' | 'shop';
+type Tab = 'features' | 'sprites' | 'animations' | 'map' | 'shop';
 
 const FEATURES_HELP: Record<string, string> = {
   shop: 'The Royal Shop (players spend coins)',
@@ -142,6 +143,169 @@ function SpriteCell({ slot, busy, onRestore, onUpload }: { slot: string; busy: b
         </label>
         <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={onRestore} disabled={busy} title="Restore from canonical grid">↺</button>
       </div>
+    </div>
+  );
+}
+
+// --- sprite animations ----------------------------------------------------------------
+
+/**
+ * Infers a likely animation name from a frame slot name: strips the trailing
+ * frame number — dragon_flap3 → dragon_flap, dragon_idle → dragon_idle.
+ */
+function guessAnimName(slot: string): string {
+  return slot.replace(/\d+$/, '');
+}
+
+function AnimationsTab() {
+  const [animations, setAnimations] = useState<AnimDef[]>([]);
+  const [unassigned, setUnassigned] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [name, setName] = useState('');
+  const [fps, setFps] = useState(8);
+  const [loop, setLoop] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [previewIdx, setPreviewIdx] = useState(0);
+
+  const refresh = useCallback(() => {
+    api.getAnimations().then((r) => {
+      setAnimations(r.animations);
+      setUnassigned(r.unassigned);
+    }).catch((e) => setNotice((e as Error).message));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  function togglePick(slot: string) {
+    setSelected((s) => (s.includes(slot) ? s.filter((x) => x !== slot) : [...s, slot]));
+  }
+
+  /** Auto-pick one trailing-number group (e.g. all dragon_flap* frames). */
+  function autoPick(base: string) {
+    const group = unassigned.filter((f) => guessAnimName(f) === base).sort();
+    setSelected(group);
+    setName(base);
+  }
+
+  async function create() {
+    setNotice(null);
+    if (!name.trim() || selected.length === 0) {
+      setNotice('Pick a name and at least one frame.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.saveAnimation(name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'), { frames: selected, fps, loop });
+      setNotice(`Animation "${name}" registered — monsters with that sprite slot will play it.`);
+      setSelected([]);
+      setName('');
+      refresh();
+    } catch (e) {
+      setNotice((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(n: string) {
+    if (!window.confirm(`Delete animation "${n}"? Monsters fall back to its static sprite.`)) return;
+    try {
+      await api.deleteAnimation(n);
+      refresh();
+    } catch (e) {
+      setNotice((e as Error).message);
+    }
+  }
+
+  // Preview player: cycles the selected frames at the chosen fps.
+  useEffect(() => {
+    if (selected.length === 0) return;
+    const t = window.setInterval(() => setPreviewIdx((i) => (i + 1) % selected.length), Math.round(1000 / Math.max(fps, 1)));
+    return () => window.clearInterval(t);
+  }, [selected, fps]);
+
+  const bases = [...new Set(unassigned.map(guessAnimName))];
+
+  return (
+    <div className="pixel-panel">
+      <p className="pixel-font" style={{ fontSize: '0.75rem', margin: '0 0 0.25rem' }}>🎞 ANIMATION STUDIO</p>
+      <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0 0 0.75rem' }}>
+        Upload frames in the Sprites tab (names like <code>dragon_flap1</code>, <code>dragon_flap2</code>,
+        <code> dragon_idle</code>), then group them here into a playable clip. A clip plays on any
+        monster whose sprite slot matches the clip name (or whose slot name starts with it).
+      </p>
+      {notice && <p className="status-text">{notice}</p>}
+
+      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: '0 0 0.4rem' }}>REGISTERED CLIPS</p>
+      <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 1rem' }}>
+        {animations.map((a) => (
+          <li key={a.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <span className="term-font" style={{ fontSize: '0.95rem' }}>
+              <strong>{a.name}</strong> · {a.frames.length} frame{a.frames.length === 1 ? '' : 's'} · {a.fps} fps · {a.loop ? 'loops' : 'once'}
+              <span style={{ color: 'var(--d-stone-light)' }}> ({a.frames.join(', ')})</span>
+            </span>
+            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.55rem' }} onClick={() => void remove(a.name)}>✕</button>
+          </li>
+        ))}
+        {animations.length === 0 && <p className="status-text" style={{ margin: 0 }}>None yet — group some frames below.</p>}
+      </ul>
+
+      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: '0 0 0.4rem' }}>NEW CLIP</p>
+      {bases.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.5rem' }}>
+          <span className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)' }}>Quick-pick group:</span>
+          {bases.map((b) => (
+            <button key={b} className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.55rem' }} onClick={() => autoPick(b)}>
+              {b} ({unassigned.filter((f) => guessAnimName(f) === b).length})
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <input className="pixel-input" placeholder="clip name (e.g. dragon_flap)" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 200 }} />
+        <label className="term-font" style={{ fontSize: '0.9rem' }}>fps</label>
+        <input className="pixel-input" type="number" min={1} max={30} value={fps} onChange={(e) => setFps(Number(e.target.value))} style={{ width: 70 }} />
+        <label className="term-font" style={{ fontSize: '0.9rem' }}>
+          <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} /> loop
+        </label>
+      </div>
+      {unassigned.length === 0 ? (
+        <p className="status-text" style={{ margin: 0 }}>No spare frames — upload PNGs in the Sprites tab first.</p>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))', gap: '0.4rem' }}>
+          {unassigned.map((slot) => {
+            const isSel = selected.includes(slot);
+            return (
+              <button
+                key={slot}
+                onClick={() => togglePick(slot)}
+                title={slot}
+                style={{
+                  textAlign: 'center', padding: '0.3rem', cursor: 'pointer',
+                  border: isSel ? '2px solid var(--d-gold)' : '1px solid rgba(255,255,255,0.15)',
+                  background: 'transparent', color: 'var(--d-parchment)',
+                }}
+              >
+                <img src={`/sprites/${slot}.png`} alt={slot} style={{ width: 40, height: 40, imageRendering: 'pixelated', objectFit: 'contain' }}
+                  onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+                <p className="term-font" style={{ fontSize: '0.65rem', margin: '0.15rem 0 0', wordBreak: 'break-all' }}>{slot}</p>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {selected.length > 0 && (
+        <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ width: 64, height: 64, display: 'grid', placeItems: 'center', background: 'var(--d-black)', border: '2px solid var(--d-darkwood)' }}>
+            <img key={previewIdx} src={`/sprites/${selected[previewIdx]}.png`} alt="preview" style={{ width: 56, height: 56, imageRendering: 'pixelated', objectFit: 'contain' }}
+              onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+          </div>
+          <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.65rem' }} onClick={() => void create()} disabled={busy || !name.trim()}>
+            {busy ? '…' : `REGISTER CLIP (${selected.length} frames)`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -287,7 +451,7 @@ export default function AdminPanel({ onExit }: { onExit?: () => void }) {
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <div className="pixel-panel" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <p className="pixel-font" style={{ fontSize: '0.85rem', margin: '0.25rem 0.5rem 0 0', color: 'var(--d-gold)' }}>👑 ADMIN</p>
-        {(['features', 'sprites', 'map', 'shop'] as Tab[]).map((t) => (
+        {(['features', 'sprites', 'animations', 'map', 'shop'] as Tab[]).map((t) => (
           <button
             key={t}
             className={`pixel-btn ${tab === t ? 'pixel-btn--gold' : 'pixel-btn--ghost'}`}
@@ -305,6 +469,7 @@ export default function AdminPanel({ onExit }: { onExit?: () => void }) {
       </div>
       {tab === 'features' && <FeaturesTab />}
       {tab === 'sprites' && <SpritesTab />}
+      {tab === 'animations' && <AnimationsTab />}
       {tab === 'map' && <MapTab themes={themes} />}
       {tab === 'shop' && <ShopTab />}
     </div>

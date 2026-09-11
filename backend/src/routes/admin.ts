@@ -106,6 +106,92 @@ export function registerAdminRoutes(router: Router): void {
     }
   });
 
+  // --- admin: sprite animations ---------------------------------------------------
+  //
+  // Named animation cycles over uploaded sprite frames. Frames are plain PNGs
+  // in public/sprites/ whose names share a base and a trailing frame number —
+  // e.g. dragon_flap1, dragon_flap2, dragon_flap3 + dragon_idle — grouped here
+  // into a playable clip: { name, frames: ['dragon_flap1', ...], fps, loop }.
+  // Stored in public/sprites/animations.json; the frontend loader picks it up
+  // and the engine plays registered clips on patrol monsters.
+
+  const ANIM_FILE = path.join(SPRITES_DIR, 'animations.json');
+
+  interface AnimDef {
+    name: string;
+    frames: string[];
+    fps: number;
+    loop: boolean;
+  }
+
+  function readAnims(): AnimDef[] {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(ANIM_FILE, 'utf8'));
+      return Array.isArray(parsed) ? (parsed as AnimDef[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writeAnims(anims: AnimDef[]): void {
+    fs.writeFileSync(ANIM_FILE, JSON.stringify(anims, null, 2) + '\n');
+  }
+
+  router.get('/admin/animations', requireAdmin, async (_req, res) => {
+    try {
+      const anims = readAnims();
+      // Which frame PNGs exist but belong to no registered animation yet?
+      const files = fs.existsSync(SPRITES_DIR)
+        ? fs.readdirSync(SPRITES_DIR).filter((f) => f.endsWith('.png')).map((f) => f.replace(/\.png$/, ''))
+        : [];
+      const used = new Set(anims.flatMap((a) => a.frames));
+      const unassigned = files.filter((f) => !used.has(f));
+      res.json({ animations: anims, unassigned });
+      return;
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  router.put('/admin/animations/:name', requireAdmin, async (req, res) => {
+    const name = String(req.params.name);
+    if (!isSafeSlot(name)) return res.status(400).json({ error: 'Invalid animation name' });
+    const b = req.body ?? {};
+    const frames = Array.isArray(b.frames) ? b.frames.filter((f: unknown) => typeof f === 'string' && isSafeSlot(f as string)) : [];
+    if (frames.length === 0) return res.status(400).json({ error: 'frames: non-empty array of sprite slot names required' });
+    const fps = Number(b.fps);
+    const anim: AnimDef = {
+      name,
+      frames,
+      fps: Number.isFinite(fps) && fps >= 1 && fps <= 30 ? Math.round(fps) : 8,
+      loop: b.loop !== false,
+    };
+    const anims = readAnims();
+    const i = anims.findIndex((a) => a.name === name);
+    if (i >= 0) anims[i] = anim;
+    else anims.push(anim);
+    try {
+      writeAnims(anims);
+      res.json({ ok: true, animation: anim });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  router.delete('/admin/animations/:name', requireAdmin, async (req, res) => {
+    const name = String(req.params.name);
+    if (!isSafeSlot(name)) return res.status(400).json({ error: 'Invalid animation name' });
+    try {
+      const anims = readAnims();
+      const next = anims.filter((a) => a.name !== name);
+      if (next.length === anims.length) return res.status(404).json({ error: 'Unknown animation' });
+      writeAnims(next);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
   // --- admin: map config ---------------------------------------------------------
 
   router.get('/admin/map', requireAdmin, async (_req, res) => {

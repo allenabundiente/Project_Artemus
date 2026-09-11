@@ -3,6 +3,7 @@ import type { AvatarPrefs, ScoreResultResponse, Term } from '../types';
 import * as api from '../api';
 import { ArcadeEngine, buildLayout, BACKING_W, BACKING_H } from '../game/engine';
 import { loadSprites, spriteDataUrl } from '../game/sprites';
+import { getAnimations, loadExtraSprites } from '../game/animations';
 import { sfx } from '../game/sfx';
 import BattleScreen from './BattleScreen';
 
@@ -75,6 +76,10 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         challengesRef.current = challenges;
         const sprites = await loadSprites();
         if (cancelled) return;
+        // Admin-uploaded custom frames + animation clips (best-effort).
+        await loadExtraSprites(sprites);
+        const animations = await getAnimations();
+        if (cancelled) return;
         const layout = buildLayout(chapterId, challenges);
         const canvas = canvasRef.current!;
         canvas.width = BACKING_W;
@@ -107,7 +112,8 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
           },
         },
         themeId,
-        avatar ? { ...avatar } : undefined);
+        avatar ? { ...avatar } : undefined,
+        animations);
         engineRef.current = engine;
         setTimeLeft(termInfo.settings.timeLimitSeconds);
         setPhase('playing');

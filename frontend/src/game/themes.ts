@@ -37,6 +37,8 @@ export interface Theme {
   /** Particle bursts. Defaults keep the classic green/gold. */
   particleHit?: string;
   particleScore?: string;
+  /** Run-footfall dust puff color (defaults to a warm floor-dust tone). */
+  dustColor?: string;
   /** Which monster sprites patrol the level, cycling by monster index. */
   monsters?: string[];
   /**
@@ -75,6 +77,7 @@ export const FOREST: Theme = {
   hpFilled: '#a82a2a',
   hpEmpty: '#4f3a2b',
   particleHit: '#8fdc4a',
+  dustColor: 'rgba(122, 150, 96, 0.7)', // mossy glade dust
   torchPole: '#3a2a12',
   torchSconce: '#2a1f14',
 };

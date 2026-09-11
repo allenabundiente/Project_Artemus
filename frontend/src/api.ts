@@ -238,6 +238,27 @@ export async function restoreSprite(slot: string): Promise<{ ok: boolean; note?:
   return send(`/api/admin/sprites/${encodeURIComponent(slot)}`, 'DELETE');
 }
 
+// --- admin: sprite animations -------------------------------------------------------
+
+export interface AnimDef {
+  name: string;
+  frames: string[];
+  fps: number;
+  loop: boolean;
+}
+
+export async function getAnimations(): Promise<{ animations: AnimDef[]; unassigned: string[] }> {
+  return get('/api/admin/animations');
+}
+
+export async function saveAnimation(name: string, def: { frames: string[]; fps?: number; loop?: boolean }): Promise<{ ok: boolean; animation: AnimDef }> {
+  return send(`/api/admin/animations/${encodeURIComponent(name)}`, 'PUT', def);
+}
+
+export async function deleteAnimation(name: string): Promise<{ ok: boolean }> {
+  return send(`/api/admin/animations/${encodeURIComponent(name)}`, 'DELETE');
+}
+
 export async function getAdminMap(): Promise<MapConfig> {
   return get('/api/admin/map');
 }

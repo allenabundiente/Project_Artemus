@@ -15,8 +15,12 @@ ENV NODE_ENV=production
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci
 COPY backend/ ./
-# The built SPA lands exactly where server.ts looks for it (backend/public).
-COPY --from=frontend-build /app/frontend/dist ../public
+# The built SPA lands exactly where server.ts looks for it. server.ts resolves
+# publicDir relative to backend/src → <repo>/backend/public, and this stage's
+# WORKDIR is /app/backend, so "./public" = /app/backend/public.
+# (The old "../public" copied to /app/public, which the server never reads —
+# the SPA block never registered and / answered 404 "Cannot GET /".)
+COPY --from=frontend-build /app/frontend/dist ./public
 
 EXPOSE 8080
 # migrate.mjs is idempotent (tracked in schema_migrations), so it is safe on

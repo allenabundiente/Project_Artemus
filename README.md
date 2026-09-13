@@ -1,6 +1,8 @@
 # QuestBook
 
 > *(formerly CodeBook Arcade — if you have an old clone or bookmark, pull the latest and you're up to date; the app itself is a single-page app, so no link paths changed)*
+>
+> **Contributing?** Start with [CONTRIBUTING.md](CONTRIBUTING.md) — Codespaces setup, `run.sh`, migrations, and the plugin API.
 
 > Hi, I'm Richard — or, as I like to call myself, **Artemus** (my artist name).
 >

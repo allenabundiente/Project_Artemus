@@ -100,11 +100,41 @@ export interface BookRow {
   questCount: number | null;
   /** 'general' (any subject) or 'programming' (code-flavored questions). */
   quizMode: QuizMode;
+  /** Teacher take-down: hidden from players and locked for play. */
+  locked: boolean;
+  /** Optional availability window — null means unbounded on that side. */
+  availableFrom: Date | null;
+  availableUntil: Date | null;
+  /** How many chapters become playable quests (null = auto, up to 12). */
+  questChapters: number | null;
   createdAt: Date;
 }
 
 function mapBook(r: any): BookRow {
-  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, questCount: r.quest_count ?? null,  quizMode: ['programming', 'language'].includes(r.quiz_mode) ? r.quiz_mode : 'general', createdAt: r.created_at };
+  return {
+    id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null,
+    questCount: r.quest_count ?? null,
+    quizMode: ['programming', 'language'].includes(r.quiz_mode) ? r.quiz_mode : 'general',
+    locked: r.locked ?? false,
+    availableFrom: r.available_from ? new Date(r.available_from) : null,
+    availableUntil: r.available_until ? new Date(r.available_until) : null,
+    questChapters: r.quest_chapters ?? null,
+    createdAt: r.created_at,
+  };
+}
+
+/**
+ * Is the book playable right now for a student? Locked books are out of play
+ * entirely; the availability window bounds the rest (either side optional).
+ * Teachers/admins bypass the gate (they manage the book, and preview it).
+ */
+export function isBookPlayable(book: {
+  locked: boolean; availableFrom: Date | null; availableUntil: Date | null;
+}, now: Date = new Date()): boolean {
+  if (book.locked) return false;
+  if (book.availableFrom && now < book.availableFrom) return false;
+  if (book.availableUntil && now > book.availableUntil) return false;
+  return true;
 }
 
 export interface UserRow {
@@ -175,12 +205,32 @@ function mapScore(r: any): ScoreRow {
 
 // --- books / chapters / challenges -------------------------------------------
 
-export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null, questCount: number | null = null, quizMode: QuizMode = 'general'): Promise<string> {
+export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null, questCount: number | null = null, quizMode: QuizMode = 'general', questChapters: number | null = null): Promise<string> {
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO books (title, filename, owner_id, guild_id, quest_count, quiz_mode) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [title, filename, ownerId, guildId, questCount, quizMode]
+    `INSERT INTO books (title, filename, owner_id, guild_id, quest_count, quiz_mode, quest_chapters) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [title, filename, ownerId, guildId, questCount, quizMode, questChapters]
   );
   return row!.id;
+}
+
+export async function deleteBook(bookId: string): Promise<boolean> {
+  // chapters, challenges, progress, and scores all cascade (0001 schema).
+  return (await execute(`DELETE FROM books WHERE id = $1`, [bookId])) > 0;
+}
+
+/** Set how many of the PDF's chapters become playable quests (null = auto). */
+export async function updateBookQuestChapters(bookId: string, questChapters: number | null): Promise<BookRow | null> {
+  const n = questChapters === null ? null : Math.max(1, Math.min(12, Math.round(questChapters)));
+  const row = await queryOne(`UPDATE books SET quest_chapters = $2 WHERE id = $1 RETURNING *`, [bookId, n]);
+  return row ? mapBook(row) : null;
+}
+
+/** Overwrite a book's access gate with the given (already-merged) state. */
+export async function updateBookAccess(bookId: string, access: { locked: boolean; availableFrom: Date | null; availableUntil: Date | null }): Promise<void> {
+  await query(
+    `UPDATE books SET locked = $2, available_from = $3, available_until = $4 WHERE id = $1`,
+    [bookId, access.locked, access.availableFrom, access.availableUntil],
+  );
 }
 
 /** Set (or clear) the per-book quiz mode ('general' | 'programming'). */

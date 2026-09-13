@@ -12,6 +12,7 @@ import { registerAdminRoutes, fetchCustomThemes } from './admin.js';
 import {
   initDbResilient, query, queryOne, withTransaction, applyCoinsTx, insertScoreTx, upsertProgressTx,
   insertBook, insertChapter, insertChallenge, getBook, listBooks, updateBookQuestCount, updateBookQuizMode,
+  deleteBook, updateBookAccess, isBookPlayable, updateBookQuestChapters,
   getChapters, getChapter, getChallengesForChapter, getChapterWithText,
   countChallenges, deleteChallengesForBook, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
@@ -21,7 +22,7 @@ import {
   getChallenge, replaceChallenge, nextChallengeOrd,
   getGlobalMapConfig, getGuildMapSettings, setGuildMapTheme,
   listGuildsWithCounts, removeGuildMember,
-  type GuildRow, type UserRow, type ChapterRow,
+  type GuildRow, type UserRow, type ChapterRow, type BookRow,
 } from '../db/db.js';
 
 /**
@@ -54,11 +55,16 @@ export async function generateChallengesForBook(
     quizMode: book?.quizMode ?? 'general',
   };
   const chapters = await getChapters(bookId);
+  // "1–2 long quests per PDF": only the first N chapters become quests
+  // (book.quest_chapters; null = auto, capped at 12). This is the efficiency
+  // lever — generation (LLM calls!) only runs for quest chapters.
+  const questChapterCount = book?.questChapters ?? null;
+  const effectiveChapters = questChapterCount ? chapters.slice(0, questChapterCount) : chapters.slice(0, 12);
   const useLlm = isLlmConfigured();
   let generated = 0;
   let llmFailures = 0;
 
-  for (const chapter of chapters.slice(0, 12)) {
+  for (const chapter of effectiveChapters) {
     let content: ChapterContent;
     try {
       content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter, perChapterTarget(target, chapters.length));
@@ -73,6 +79,32 @@ export async function generateChallengesForBook(
     generated += content.challenges.length;
   }
   return { challengeCount: generated, llmFailures, mode: useLlm ? 'llm' : 'heuristic' };
+}
+
+/** Can this user manage the book (owner, guild teacher, or any admin)? */
+function canManageBook(user: UserRow, book: BookRow): boolean {
+  if (user.role === 'admin') return true;
+  if (book.ownerId === user.id) return true;
+  return !!(book.guildId && user.role === 'teacher' && user.guildId === book.guildId);
+}
+
+/** Human-readable reason a book is not playable right now. */
+function bookLockedMessage(book: BookRow): string {
+  if (book.locked) return 'This quest is locked by your teacher.';
+  const now = Date.now();
+  if (book.availableFrom && book.availableFrom.getTime() > now) {
+    return `This quest opens ${book.availableFrom.toLocaleString('en-US')}.`;
+  }
+  return 'This quest window has closed.';
+}
+
+/** Serialized access gate for API responses. */
+function bookAccessPayload(book: BookRow | null) {
+  return {
+    locked: book?.locked ?? false,
+    availableFrom: book?.availableFrom?.toISOString() ?? null,
+    availableUntil: book?.availableUntil?.toISOString() ?? null,
+  };
 }
 
 /**
@@ -448,10 +480,14 @@ export function createApiRouter(): Router {
         guildId = guild?.id ?? null;
       }
       const questCount = clampTargetCount(req.body?.questCount);
+      // "1–2 long quests per PDF": how many chapters become quests. Body may be
+      // 1-12, or absent/null/'' for auto (capped at 12 at generation time).
+      const rawChapters = req.body?.questChapters;
+      const questChapters = rawChapters == null || rawChapters === '' ? null : Math.max(1, Math.min(12, Math.round(Number(rawChapters))));
       // Filename detection (${topic}_code.pdf → programming) with explicit
       // teacher override taking precedence.
       const quizMode = detectQuizMode(req.file.originalname, req.body?.quizMode);
-      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount, quizMode);
+      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount, quizMode, questChapters);
       for (let i = 0; i < parsed.chapters.length; i++) {
         const ch = parsed.chapters[i];
         await insertChapter(bookId, i, ch.title, ch.text, ch.codeBlocks);
@@ -488,6 +524,15 @@ export function createApiRouter(): Router {
     if (req.body?.questCount !== undefined) {
       const updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount));
       if (updated) book.questCount = updated.questCount;
+    }
+    if (req.body?.questChapters !== undefined) {
+      const raw = req.body.questChapters;
+      const n = raw === null || raw === '' ? null : Math.max(1, Math.min(12, Math.round(Number(raw))));
+      if (raw !== null && raw !== '' && !Number.isFinite(n)) {
+        return res.status(400).json({ error: 'questChapters must be 1-12 or null for auto' });
+      }
+      const updated = await updateBookQuestChapters(bookId, Number.isFinite(n as number) ? (n as number) : null);
+      if (updated) book.questChapters = updated.questChapters;
     }
     const guild = book.guildId ? await getGuild(book.guildId) : null;
     const result = await generateChallengesForBook(bookId, term, guild?.termSettings ?? null);
@@ -536,7 +581,10 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(401).json({ error: 'User not found' });
     const guild = await resolveUserGuild(user);
-    const books = await listBooks(user.id, guild?.id ?? null);
+    const all = await listBooks(user.id, guild?.id ?? null);
+    // Locked / out-of-window books stay invisible to players; their teacher
+    // (or owner) still sees them so they can unlock or remove them.
+    const books = all.filter((b) => isBookPlayable(b) || canManageBook(user, b));
     res.json(books);
   });
 
@@ -546,6 +594,9 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     const allowed = book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId);
     if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+    if (!isBookPlayable(book) && !canManageBook(user!, book)) {
+      return res.status(423).json({ error: bookLockedMessage(book) });
+    }
     const chapters = await getChapters(book.id);
     const withCounts = await Promise.all(chapters.map(async (c) => ({
       id: c.id, idx: c.idx, title: c.title,
@@ -564,6 +615,9 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     const allowed = book && (book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId));
     if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+    if (book && !isBookPlayable(book) && !canManageBook(user!, book)) {
+      return res.status(423).json({ error: bookLockedMessage(book) });
+    }
     res.json({ chapter: { id: chapter.id, title: chapter.title }, challenges: await getChallengesForChapter(chapterId) });
   });
 
@@ -578,7 +632,52 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     const allowed = book && (book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId));
     if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+    if (book && !isBookPlayable(book) && !canManageBook(user!, book)) {
+      return res.status(423).json({ error: bookLockedMessage(book) });
+    }
     res.json(buildLessonOverview(chapter));
+  });
+
+  /**
+   * Remove a tome entirely. Owner or guild teacher only. Chapters,
+   * challenges, progress, and scores cascade away with the book (0001
+   * schema); the confirm dialog in the UI makes that cost explicit.
+   */
+  router.delete('/books/:id', requireAuth, async (req, res) => {
+    const book = await getBook(String(req.params.id));
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const user = await getUserById(req.user!.id);
+    if (!user || !canManageBook(user, book)) return res.status(403).json({ error: 'Not allowed' });
+    await deleteBook(book.id);
+    res.json({ ok: true, title: book.title });
+  });
+
+  /**
+   * Access gate: lock/unlock the tome outright, or set an availability window
+   * (time-limited access). Owner or guild teacher only. Body may carry any
+   * combination of { locked, availableFrom, availableUntil }; a field set to
+   * null clears that bound. Returns the merged gate state.
+   */
+  router.put('/books/:id/access', requireAuth, async (req, res) => {
+    const book = await getBook(String(req.params.id));
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const user = await getUserById(req.user!.id);
+    if (!user || !canManageBook(user, book)) return res.status(403).json({ error: 'Not allowed' });
+
+    const body = req.body ?? {};
+    const locked = typeof body.locked === 'boolean' ? body.locked : book.locked;
+    const parseBound = (v: unknown): Date | null | undefined => {
+      if (v === undefined) return undefined;           // leave as-is
+      if (v === null || v === '') return null;          // clear
+      const d = new Date(String(v));
+      return Number.isNaN(d.getTime()) ? undefined : d; // invalid → ignore
+    };
+    const from = parseBound(body.availableFrom) ?? book.availableFrom;
+    const until = parseBound(body.availableUntil) ?? book.availableUntil;
+    if (from && until && from > until) return res.status(400).json({ error: 'availableFrom must be before availableUntil' });
+
+    await updateBookAccess(book.id, { locked, availableFrom: from, availableUntil: until });
+    res.json(bookAccessPayload(await getBook(book.id)));
   });
 
   router.post('/books/:id/regenerate', requireAuth, async (req, res) => {
@@ -608,10 +707,18 @@ export function createApiRouter(): Router {
     const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
 
-    if (req.body?.questCount !== undefined || req.body?.quizMode !== undefined) {
+    if (req.body?.questCount !== undefined || req.body?.questChapters !== undefined || req.body?.quizMode !== undefined) {
       let updated = book;
       if (req.body?.questCount !== undefined) {
         updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount)) ?? book;
+      }
+      if (req.body?.questChapters !== undefined) {
+        const raw = req.body.questChapters;
+        const n = raw === null || raw === '' ? null : Math.max(1, Math.min(12, Math.round(Number(raw))));
+        if (raw !== null && raw !== '' && !Number.isFinite(n)) {
+          return res.status(400).json({ error: 'questChapters must be 1-12 or null for auto' });
+        }
+        updated = await updateBookQuestChapters(bookId, Number.isFinite(n as number) ? (n as number) : null) ?? book;
       }
       if (req.body?.quizMode !== undefined) {
         const raw = req.body.quizMode;
@@ -620,9 +727,9 @@ export function createApiRouter(): Router {
         updated = await updateBookQuizMode(bookId, mode) ?? book;
       }
       if (!updated) return res.status(500).json({ error: 'Could not save quest settings' });
-      return res.json({ bookId, questCount: updated.questCount, quizMode: updated.quizMode });
+      return res.json({ bookId, questCount: updated.questCount, questChapters: updated.questChapters, quizMode: updated.quizMode });
     }
-    res.json({ bookId, questCount: book.questCount, quizMode: book.quizMode });
+    res.json({ bookId, questCount: book.questCount, questChapters: book.questChapters, quizMode: book.quizMode });
   });
 
   // --- teacher: review / regenerate individual challenges ------------------------

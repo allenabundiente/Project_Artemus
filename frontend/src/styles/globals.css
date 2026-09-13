@@ -549,6 +549,13 @@ canvas {
   outline-offset: -6px;
 }
 
+/* Anchor for the touch-controls overlay: the canvas's positioning context. */
+.game-canvas-wrap {
+  position: relative;
+  width: min(100%, 960px);
+  margin: 0 auto;
+}
+
 /* ------------------------------------------------------------------ */
 /* Touch compatibility (phones/tablets)                                 */
 /* ------------------------------------------------------------------ */
@@ -568,6 +575,32 @@ canvas {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Overlay variant: floats over the game canvas (inside .game-canvas-wrap),
+   pinned to the bottom corners so thumbs rest naturally on the bezel. Taps
+   BETWEEN the buttons pass through to the page (pointer-events: none here;
+   re-enabled on the buttons). */
+.touch-controls--overlay {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.touch-controls--overlay .touch-btn {
+  pointer-events: auto;
+  opacity: 0.85;
+  background: rgba(20, 14, 28, 0.72);
+}
+
+.touch-controls--overlay .touch-btn:active {
+  opacity: 1;
 }
 
 /* Active D-pad feedback: a pressed direction visibly lights up (also gives

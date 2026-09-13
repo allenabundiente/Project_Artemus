@@ -21,6 +21,13 @@ export interface BookMeta {
   guildId: string | null;
   /** Teacher-chosen challenge count for this PDF (null = auto). */
   questCount: number | null;
+  /** How many chapters become playable quests (null = auto, max 12). */
+  questChapters: number | null;
+  /** Teacher lock: hidden from players until unlocked. */
+  locked: boolean;
+  /** Availability window (ISO strings; null = unbounded on that side). */
+  availableFrom: string | null;
+  availableUntil: string | null;
   /** 'general' (any subject) or 'programming' (code-flavored questions). */
   quizMode: QuizMode;
   createdAt: string;

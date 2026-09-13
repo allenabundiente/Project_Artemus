@@ -7,14 +7,17 @@ interface Props {
 }
 
 /**
- * On-screen D-pad for touch devices (phones/tablets): ◀ ▶ on the left,
- * JUMP on the right. Rendered only when a coarse pointer exists, so desktop
+ * On-screen D-pad for touch devices (phones/tablets): ◀ ▶ bottom-left,
+ * JUMP bottom-right — rendered as an OVERLAY floating over the game canvas
+ * (absolute inside the canvas wrapper), never as a block that shoves the
+ * canvas up the page. Only shown when a coarse pointer exists, so desktop
  * keyboards stay the primary control and the pad never clutters the HUD.
  *
  * Pointer events (not click/touchstart) give us: multi-touch (run + jump at
  * once), slide-off releases (pointerleave/pointercancel), and mouse testing
  * on desktop. `touch-action: none` stops scroll/zoom gestures from stealing
- * a held direction.
+ * a held direction; the overlay itself is pointer-transparent so taps between
+ * buttons pass through to the page.
  */
 export default function TouchControls({ engine }: Props) {
   const heldRef = useRef<{ left: boolean; right: boolean; jump: boolean }>({ left: false, right: false, jump: false });
@@ -49,29 +52,22 @@ export default function TouchControls({ engine }: Props) {
     };
   }
 
-  // 64px square (well past the 44px minimum, comfortably thumb-sized); JUMP
-  // is wider — it's the most-pressed button mid-fight.
+  // 60px square (well past the 44px minimum, comfortably thumb-sized); JUMP is
+  // wider — it's the most-pressed button mid-fight. `whiteSpace: nowrap` keeps
+  // the label from wrapping/popping out of the button on narrow screens.
   const btn: React.CSSProperties = {
-    width: 64,
-    height: 64,
+    width: 60,
+    height: 60,
     fontSize: '1.5rem',
     lineHeight: 1,
+    padding: 0,
     userSelect: 'none',
     WebkitUserSelect: 'none',
     touchAction: 'none',
   };
 
   return (
-    <div
-      className="touch-controls"
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: '0.5rem',
-        marginTop: '0.6rem',
-      }}
-    >
+    <div className="touch-controls touch-controls--overlay">
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button
           type="button"
@@ -104,14 +100,14 @@ export default function TouchControls({ engine }: Props) {
         type="button"
         aria-label="Jump"
         className="pixel-btn pixel-btn--primary touch-btn touch-btn--jump"
-        style={{ ...btn, width: 104, height: 72 }}
+        style={{ ...btn, width: 96, height: 60, fontSize: '1.05rem', whiteSpace: 'nowrap', letterSpacing: '0.05em' }}
         onPointerDown={press('jump')}
         onPointerUp={release('jump')}
         onPointerLeave={release('jump')}
         onPointerCancel={release('jump')}
         onContextMenu={(e) => e.preventDefault()}
       >
-        ⤒ JUMP
+        JUMP
       </button>
     </div>
   );

@@ -145,11 +145,12 @@ export async function getTermSettings(term: string): Promise<{ term: string; set
 
 // --- books -------------------------------------------------------------------------
 
-export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto'): Promise<UploadResult> {
+export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto', questChapters?: number | null): Promise<UploadResult> {
   const form = new FormData();
   form.append('pdf', file);
   if (questCount != null) form.append('questCount', String(questCount));
   if (quizMode && quizMode !== 'auto') form.append('quizMode', quizMode);
+  if (questChapters != null) form.append('questChapters', String(questChapters));
   const res = await fetch('/api/upload', { method: 'POST', body: form, headers: authHeaders() });
   return json<UploadResult>(res);
 }
@@ -159,8 +160,12 @@ export async function generateChallenges(bookId: string, term: string = 'prelims
 }
 
 /** Read or set a book's per-PDF quest settings (quest count; null = auto). */
-export async function setBookQuestCount(bookId: string, questCount: number | null, quizMode?: QuizMode): Promise<{ bookId: string; questCount: number | null; quizMode: QuizMode }> {
-  return send(`/api/books/${bookId}/settings`, 'PUT', { questCount, ...(quizMode ? { quizMode } : {}) });
+export async function setBookQuestCount(bookId: string, questCount: number | null, quizMode?: QuizMode, questChapters?: number | null): Promise<{ bookId: string; questCount: number | null; questChapters: number | null; quizMode: QuizMode }> {
+  return send(`/api/books/${bookId}/settings`, 'PUT', {
+    questCount,
+    ...(quizMode ? { quizMode } : {}),
+    ...(questChapters !== undefined ? { questChapters } : {}),
+  });
 }
 
 /** Wipe a book's challenges so the next generate() rebuilds them. */
@@ -184,6 +189,19 @@ export async function listBooks(): Promise<BookMeta[]> {
 
 export async function getBook(bookId: string): Promise<BookDetail> {
   return get<BookDetail>(`/api/books/${bookId}`);
+}
+
+/** Delete a tome entirely (chapters, challenges, and progress go with it). */
+export async function deleteBook(bookId: string): Promise<{ ok: boolean; title: string }> {
+  return send(`/api/books/${bookId}`, 'DELETE');
+}
+
+/** Lock/unlock a tome or set its availability window (time-limited access). */
+export async function setBookAccess(
+  bookId: string,
+  gate: { locked?: boolean; availableFrom?: string | null; availableUntil?: string | null },
+): Promise<{ locked: boolean; availableFrom: string | null; availableUntil: string | null }> {
+  return send(`/api/books/${bookId}/access`, 'PUT', gate);
 }
 
 export async function getLesson(bookId: string, chapterId: string): Promise<LessonOverview> {

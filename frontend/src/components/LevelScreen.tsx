@@ -348,9 +348,13 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         </button>
       </div>
 
-      <canvas id="game-canvas" ref={canvasRef} />
+      {/* Wrapper is the overlay anchor: touch controls float over the canvas
+          instead of stacking below it and pushing the game down the page. */}
+      <div className="game-canvas-wrap">
+        <canvas id="game-canvas" ref={canvasRef} />
+        {isTouch && phase === 'playing' && <TouchControls engine={engineRef.current} />}
+      </div>
 
-      {isTouch && phase === 'playing' && <TouchControls engine={engineRef.current} />}
       <LandscapeHint active={phase === 'playing'} />
 
       {phase === 'battle' && planRef.current && (

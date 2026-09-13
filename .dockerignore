@@ -1,4 +1,3 @@
-# Keep the build context lean and independent of local dev state.
 **/node_modules
 **/dist
 **/public

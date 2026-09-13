@@ -23,9 +23,57 @@
   --d-copper: #c86a3c;     /* copper bronze */
   --d-iron: #9aa0a8;       /* iron grey */
   --d-skin: #d8b98a;       /* parchment/skin */
+  --d-rose-bright: #e08aa3;/* error text on dark bg (≥4.5:1 contrast) */
+
+  /* Typography + spacing rhythm (M6): one scale, used everywhere. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --radius-0: 0px;         /* arcade = square corners */
 
   --font-arcade: 'Press Start 2P', monospace;
   --font-term: 'VT323', monospace;
+}
+
+/* Text selection stays in-palette instead of browser blue. */
+::selection {
+  background: var(--d-gold);
+  color: var(--d-black);
+}
+
+/* ------------------------------------------------------------------ */
+/* Focus visibility (a11y): keyboard users must always see where they   */
+/* are. Gold double-ring matches the panel idiom; mouse clicks stay     */
+/* clean via :focus-visible (only keyboard focus rings show).           */
+/* ------------------------------------------------------------------ */
+:focus-visible {
+  outline: 3px solid var(--d-gold);
+  outline-offset: 2px;
+}
+
+.pixel-btn:focus-visible,
+.option-btn:focus-visible,
+.map-node:focus-visible {
+  outline: 3px solid var(--d-gold-bright);
+  outline-offset: 3px;
+  box-shadow: 3px 3px 0 var(--d-black), 0 0 0 6px rgba(232, 180, 60, 0.25);
+}
+
+.pixel-input:focus-visible,
+.pixel-select:focus-visible {
+  outline: 3px solid var(--d-gold);
+  outline-offset: 0;
+  border-color: var(--d-gold);
+}
+
+/* Inputs keep their focus styling on click too (typing focus must show). */
+.pixel-input:focus,
+.pixel-select:focus {
+  outline: 3px solid var(--d-gold);
+  outline-offset: 0;
+  border-color: var(--d-gold);
 }
 
 * {
@@ -79,12 +127,29 @@ canvas {
   box-shadow: 3px 3px 0 var(--d-black);
   cursor: pointer;
   text-transform: uppercase;
-  transition: transform 0.05s;
+  transition: transform 0.06s ease-out, background-color 0.15s ease-out, box-shadow 0.06s ease-out, filter 0.15s ease-out;
 }
 
 .pixel-btn:hover {
   background: var(--d-orange);
   transform: translate(-1px, -1px);
+  filter: brightness(1.05);
+}
+
+/* Variant hovers keep their identity instead of all turning orange. */
+.pixel-btn--primary:hover {
+  background: var(--d-red);
+  filter: brightness(1.18);
+}
+
+.pixel-btn--gold:hover {
+  background: var(--d-gold);
+  filter: brightness(1.12);
+}
+
+.pixel-btn--ghost:hover {
+  background: rgba(232, 180, 60, 0.12);
+  filter: none;
 }
 
 .pixel-btn:active {
@@ -109,6 +174,9 @@ canvas {
 .pixel-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  filter: grayscale(0.4);
+  transform: none;
+  box-shadow: 3px 3px 0 var(--d-black);
 }
 
 .pixel-panel {
@@ -117,8 +185,10 @@ canvas {
   outline: 2px solid var(--d-gold);
   outline-offset: -5px;
   box-shadow: 4px 4px 0 var(--d-black);
-  padding: 1rem;
+  padding: var(--space-4);
   color: var(--d-parchment);
+  /* Breathing room between stacked panels on dashboards (M6 spacing rhythm). */
+  margin-bottom: var(--space-4);
 }
 
 .pixel-panel--parchment {
@@ -142,6 +212,7 @@ canvas {
   display: flex;
   gap: 1.5rem;
   align-items: center;
+  flex-wrap: wrap; /* long HUDs wrap instead of overflowing on narrow screens */
   font-family: var(--font-arcade);
   font-size: 1.1rem;
   color: var(--d-parchment);
@@ -167,11 +238,21 @@ canvas {
   outline: 2px solid var(--d-gold);
   outline-offset: -6px;
   box-shadow: 6px 6px 0 var(--d-black);
-  padding: 1.2rem 1.5rem;
+  padding: 1.3rem 1.6rem;
   color: var(--d-black);
   font-family: var(--font-term);
-  font-size: 1.05rem;
-  line-height: 1.4;
+  font-size: 1.15rem;   /* VT323 reads small — bump for comfort */
+  line-height: 1.45;
+}
+
+/* Long prompts/wrapping text inside dialogs breathe a little. */
+.dialog-box > p {
+  line-height: 1.5;
+}
+
+/* Answer grid gains rhythm between options. */
+.dialog-box [style*="display: grid"] {
+  gap: 0.5rem;
 }
 
 .code-block {
@@ -188,18 +269,24 @@ canvas {
 
 .option-btn {
   font-family: var(--font-term);
-  font-size: 1rem;
+  font-size: 1.1rem;
   text-align: left;
-  padding: 0.5rem 0.75rem;
+  padding: 0.55rem 0.8rem;
   background: #e6d9bd;
   color: var(--d-black);
   border: 2px solid var(--d-wood);
   cursor: pointer;
   width: 100%;
+  transition: background-color 0.12s ease-out, transform 0.06s ease-out, border-color 0.12s ease-out;
 }
 
 .option-btn:hover {
   background: var(--d-gold-bright);
+  transform: translateX(3px);
+}
+
+.option-btn:active {
+  transform: translateX(3px) scale(0.99);
 }
 
 .option-btn--correct {
@@ -211,6 +298,12 @@ canvas {
   background: var(--d-red);
   border-color: var(--d-orange);
   color: var(--d-parchment);
+}
+
+.option-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
 }
 
 /* ------------------------------------------------------------------ */
@@ -226,6 +319,28 @@ canvas {
   display: grid;
   place-items: center;
   cursor: pointer;
+  transition: transform 0.08s ease-out, filter 0.12s ease-out;
+}
+
+.map-node:hover:not(.map-node--locked) {
+  transform: scale(1.15);
+  filter: brightness(1.15);
+}
+
+.map-node--current {
+  animation: node-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes node-pulse {
+  0%, 100% { outline-offset: 3px; }
+  50% { outline-offset: 6px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .map-node--current {
+    animation: none;
+    outline-offset: 5px;
+  }
 }
 
 .map-node--locked {
@@ -273,8 +388,13 @@ canvas {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.45rem 0.6rem;
+  padding: 0.55rem 0.6rem;
   border-bottom: 2px solid rgba(0, 0, 0, 0.25);
+  transition: background-color 0.12s ease-out;
+}
+
+.leaderboard-row:hover {
+  background: rgba(232, 180, 60, 0.07);
 }
 
 .leaderboard-row--me {
@@ -300,10 +420,6 @@ canvas {
   color: var(--d-black);
   border: 3px solid var(--d-darkwood);
   width: 100%;
-}
-
-.pixel-input:focus {
-  outline: 2px solid var(--d-gold);
 }
 
 .pixel-select {
@@ -334,7 +450,8 @@ canvas {
 
 .error-text {
   font-family: var(--font-term);
-  color: var(--d-rose);
+  color: var(--d-rose-bright); /* brightened: old rose failed contrast on the dungeon bg */
+  font-size: 1.05rem;
 }
 
 .boss-hp {
@@ -486,6 +603,18 @@ canvas {
 @media (prefers-reduced-motion: reduce) {
   .landscape-hint {
     animation: none;
+  }
+}
+
+/* Global reduced-motion courtesy: kill transitions/animations app-wide
+   while keeping opacity fades (per WCAG 2.3.3 guidance). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

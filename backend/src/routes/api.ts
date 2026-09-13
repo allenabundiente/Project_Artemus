@@ -617,7 +617,8 @@ export function createApiRouter(): Router {
         updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount)) ?? book;
       }
       if (req.body?.quizMode !== undefined) {
-        const mode = req.body.quizMode === 'programming' ? 'programming' : req.body.quizMode === 'general' ? 'general' : null;
+        const raw = req.body.quizMode;
+        const mode = ['programming', 'general', 'language'].includes(raw) ? raw : null;
         if (!mode) return res.status(400).json({ error: 'quizMode must be "general" or "programming"' });
         updated = await updateBookQuizMode(bookId, mode) ?? book;
       }

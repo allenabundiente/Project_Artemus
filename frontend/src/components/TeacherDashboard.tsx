@@ -112,7 +112,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       const up = await api.uploadPdf(file, questCount, uploadQuizMode);
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
-      const modeNote = up.quizMode === 'programming' ? ' programming mode' : '';
+      const modeNote = up.quizMode === 'programming' ? ' programming mode' : up.quizMode === 'language' ? ' language mode' : '';
       setNotice(`"${up.title}" is ready for your adventurers — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode,${modeNote} auto-detected from the filename unless overridden).`);
       await refreshGuildData();
     } catch (e) {
@@ -254,6 +254,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                   <option value="auto">MODE: AUTO</option>
                   <option value="general">GENERAL</option>
                   <option value="programming">PROGRAMMING</option>
+                  <option value="language">LANGUAGE</option>
                 </select>
                 <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>
                   {busy ?? 'UPLOAD QUEST (PDF)'}
@@ -299,6 +300,9 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                           ▸ {b.title}
                           {b.quizMode === 'programming' && (
                             <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)', marginLeft: '0.4rem' }} title="Programming mode — code-reading challenges">⌨ CODE</span>
+                          )}
+                          {b.quizMode === 'language' && (
+                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)', marginLeft: '0.4rem' }} title="Language mode — vocabulary and translation drills">🗣 LANG</span>
                           )}
                         </span>
                         <select

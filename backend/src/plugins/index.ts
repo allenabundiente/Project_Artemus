@@ -8,6 +8,7 @@
 import { registerPlugin, listPlugins, detectPlugin, isPluginEnabled, getPlugin } from './registry.js';
 import generalPlugin from './builtins/general.js';
 import programmingPlugin from './builtins/programming.js';
+import languagePlugin from './builtins/language.js';
 import type { QuizGeneratorPlugin, GenerationContext } from './types.js';
 
 export { registerPlugin, listPlugins, detectPlugin, isPluginEnabled, getPlugin } from './registry.js';
@@ -20,6 +21,7 @@ export function initPlugins(): void {
   if (booted) return;
   booted = true;
   registerPlugin(programmingPlugin); // specific first
+  registerPlugin(languagePlugin);    // also specific
   registerPlugin(generalPlugin);     // fallback last (detect always false)
 }
 
@@ -61,7 +63,10 @@ export function promptDirectiveFor(plugin: QuizGeneratorPlugin, ctx: GenerationC
 /** Plugin-level challenge validation (null = reject the challenge). */
 export function validateWithPlugin(plugin: QuizGeneratorPlugin, c: import('./types.js').GeneratedChallenge, ctx: GenerationContext): import('./types.js').GeneratedChallenge | null {
   try {
-    return plugin.validateChallenge?.(c, ctx) ?? c;
+    // No hook → accept. A hook returning null is an explicit REJECT and must
+    // NOT fall back to the challenge (hence no ?? here).
+    if (!plugin.validateChallenge) return c;
+    return plugin.validateChallenge(c, ctx);
   } catch (e) {
     console.error(`[plugins] validateChallenge threw for ${plugin.id}:`, (e as Error).message);
     return c;

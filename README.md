@@ -61,12 +61,9 @@ cd frontend && npm install
 - Create a new Supabase project (free tier is fine).
 - Go to **Project Settings → Database** and copy the **Connection string** (session mode, pooled). That's your `DATABASE_URL`.
   - Use the **pooled** connection string, not the direct one — serverless and short-lived connections behave better through the pooler, and the direct host is IPv6-only.
-- Open the Supabase **SQL editor** and run the three migrations in order:
-  - `backend/migrations/0001_init.sql`
-  - `backend/migrations/0002_ranks_and_defaults.sql`
-  - `backend/migrations/0003_rls.sql`
+- Open the Supabase **SQL editor** and run the migrations in order (0001 → 0006), or simpler: `cd backend && npm run migrate` applies every pending one automatically.
 
-If you're running locally against a local Postgres instead of Supabase, set `DATABASE_URL` to that connection string and run the same migrations locally.
+If you're running locally against a local Postgres instead of Supabase, set `DATABASE_URL` to that connection string and run `npm run migrate` locally.
 
 ### 3. Create the backend env file
 
@@ -138,12 +135,16 @@ questbook/
 │   │   │   │                      #   progress, scores, leaderboard, shop...
 │   │   │   └── admin.ts             # admin-panel routes: sprites, animations, themes,
 │   │   │                            #   map, guild admin, shop items
+│   │   ├── plugins/                 # quiz-generator plugin system (see docs/PLUGIN_API.md)
+│   │   │   ├── types.ts            # QuizGeneratorPlugin interface
+│   │   │   ├── registry.ts         # register/lookup + env enable/disable
+│   │   │   └── builtins/           # general, programming (_code.pdf), language (_lang/_vocab)
 │   │   └── services/
 │   │       ├── auth.ts              # bcrypt + JWT: signup, login, role middleware
 │   │       ├── contentGenerator.ts  # PDF parsing (pdfjs-dist) + challenge generation
 │   │       ├── llmClient.ts         # Anthropic / OpenAI-compatible provider client
 │   │       └── lesson.ts            # chapter → quest/challenge resolution logic
-│   ├── migrations/                  # Supabase-compatible Postgres schema (3 files, in order)
+│   ├── migrations/                  # Supabase-compatible Postgres schema (6 files, in order)
 │   ├── scripts/
 │   │   ├── make-sample-pdf.mjs      # generates sample-book.pdf for local testing
 │   │   └── setup-ollama.sh          # one-command local LLM bootstrap
@@ -168,7 +169,8 @@ questbook/
 │   ├── scripts/generate-sprites.ts  # renders spriteGrids → PNGs + manifest
 │   └── vite.config.ts              # dev server on 5173, proxies /api → localhost:4010
 │
-└── docs/ASSET_GUIDE.md             # full art / map / cosmetics contributor guide
+├── run.sh                            # ONE command: build + migrate + serve on one port
+└── docs/                             # ASSET_GUIDE.md (art) + PLUGIN_API.md (quiz plugins)
 ```
 
 ### How the pieces talk to each other
@@ -285,6 +287,11 @@ Schema lives in **`backend/migrations/*.sql`** — Supabase-compatible Postgres,
 1. `backend/migrations/0001_init.sql` — users, guilds, books, chapters, challenges, progress, scores, plus indexes and the score→guild trigger.
 2. `backend/migrations/0002_ranks_and_defaults.sql` — rank tiers and default term settings.
 3. `backend/migrations/0003_rls.sql` — RLS enablement (permissive; writes go through the backend connection).
+4. `backend/migrations/0004_book_quest_count.sql` — per-book challenge count chosen by the teacher.
+5. `backend/migrations/0005_challenge_types.sql` — true/false and short-answer challenge types.
+6. `backend/migrations/0006_book_quiz_mode.sql` — per-book quiz mode (general/programming/language routing).
+
+`npm run migrate` (in `backend/`) applies pending migrations automatically — the Docker image and `run.sh` both do this on startup.
 
 The old `data/arcade.db` SQLite file is no longer used.
 
@@ -298,6 +305,7 @@ This is an MVP with a lot of moving parts left to add. If you want to build on i
 - **Frontend is a Vite + React app** with a hand-rolled Canvas 2D engine in `frontend/src/game/`. The game screen components sit in `frontend/src/components/`. The API layer is `frontend/src/api.ts`.
 - **Stateful vs stateless** — the app is stateless between requests. Auth lives in a JWT, everything else is in Supabase. That's why adding a new feature is usually: one or two new routes, one or two new tables (or columns), and whatever UI calls them.
 - **LLM calls are server-side only** — the frontend never talks to Anthropic or any OpenAI-compatible provider directly. If you add a new generation mode or provider, keep it on the backend.
+- **Quiz generators are plugins** — new subjects/styles (law, medicine, language learning) are added by registering a `QuizGeneratorPlugin`, not by editing the core generator. See **`docs/PLUGIN_API.md`**.
 
 ### Adding a new system
 

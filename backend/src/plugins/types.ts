@@ -23,7 +23,7 @@ export interface GeneratedChallenge {
 }
 
 /** How a book's quiz mode was chosen (for the UI + logs). */
-export type QuizMode = 'general' | 'programming';
+export type QuizMode = 'general' | 'programming' | 'language';
 
 /** Everything a generator may need to know about the run. */
 export interface GenerationContext {

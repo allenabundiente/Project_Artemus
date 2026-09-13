@@ -2,9 +2,15 @@
 
 QuestBook's question generation is pluggable. A **quiz generator plugin** decides
 *when* it applies to an uploaded book and *how* generation is steered for it.
-The built-in `programming` mode (`topicname_code.pdf` → code questions) is just
-one plugin; new subjects or styles (language learning, law, medicine, …) drop in
-without touching the core generator.
+The built-in `programming` mode (`topicname_code.pdf` → code questions) and the
+`language` mode (`spanish_vocab.pdf` → vocab/translation drills) are both just
+plugins; new subjects or styles (law, medicine, history…) drop in without
+touching the core generator.
+
+**Built-ins:** `programming` (id `programming`, `*_code` filenames), `language`
+(id `language`, `*_lang` / `*_vocab` filenames, configurable via
+`QUESTBOOK_LANGUAGE_FILE_PATTERN`), and `general` (the fallback every unmatched
+upload gets).
 
 Plugins are **internal** by design (per the product spec): they ship in the
 `backend/src/plugins/` tree and are registered in code — no runtime installation

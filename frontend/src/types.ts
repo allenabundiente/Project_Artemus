@@ -56,7 +56,7 @@ export interface Progress {
   bestStreak: number;
 }
 
-export type QuizMode = 'general' | 'programming';
+export type QuizMode = 'general' | 'programming' | 'language';
 
 export interface UploadResult {
   bookId: string;

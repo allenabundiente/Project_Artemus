@@ -43,10 +43,11 @@ const DEFAULT_CHALLENGES_PER_CHAPTER = 12;
  * rule). Unmatched uploads fall back to `general`.
  */
 export function detectQuizMode(filename: string, explicit?: unknown): QuizMode {
-  if (explicit === 'programming' || explicit === 'general') return explicit;
+  if (explicit === 'programming' || explicit === 'general' || explicit === 'language') return explicit;
   initPlugins();
+  // The claiming plugin's id IS the mode; anything unknown falls back to general.
   const plugin = resolvePluginFor(filename, filename.replace(/\.pdf$/i, ''));
-  return (plugin.id === 'programming' ? 'programming' : 'general') as QuizMode;
+  return (['programming', 'language'].includes(plugin.id) ? plugin.id : 'general') as QuizMode;
 }
 
 /** Clamp a teacher-chosen target into the supported range. */

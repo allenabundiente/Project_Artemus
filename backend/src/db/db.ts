@@ -82,7 +82,7 @@ export async function queryOne<T extends pg.QueryResultRow>(sql: string, params:
 
 // --- row mappers (snake_case DB → camelCase TS) -----------------------------
 
-export type QuizMode = 'general' | 'programming';
+export type QuizMode = 'general' | 'programming' | 'language';
 
 export interface BookRow {
   id: string;
@@ -98,7 +98,7 @@ export interface BookRow {
 }
 
 function mapBook(r: any): BookRow {
-  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, questCount: r.quest_count ?? null, quizMode: r.quiz_mode === 'programming' ? 'programming' : 'general', createdAt: r.created_at };
+  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, questCount: r.quest_count ?? null,  quizMode: ['programming', 'language'].includes(r.quiz_mode) ? r.quiz_mode : 'general', createdAt: r.created_at };
 }
 
 export interface UserRow {

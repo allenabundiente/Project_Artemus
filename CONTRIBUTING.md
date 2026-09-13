@@ -20,20 +20,25 @@ The repo ships a ready dev container (`.devcontainer/devcontainer.json`), so:
    Setup is automatic — Node 22, `backend/` + `frontend/` dependencies
    installed, `backend/.env` seeded from the example, ports **4010** (app)
    and **5173** (Vite) forwarded.
-2. The one thing setup can't do for you is the database. Point the app at
-   Postgres by either:
-   - adding a **Codespaces secret** named `DATABASE_URL`
+2. **Migrations run automatically if a `DATABASE_URL` already exists** (as a
+   Codespaces secret or a pre-configured `.env`) — the post-create script
+   applies them and prints `[post-create] migrations applied.`
+3. If there's no database yet, add one — either:
+   - a **Codespaces secret** named `DATABASE_URL`
      (repo → Settings → Secrets and variables → Codespaces — future
-     codespaces get it automatically), or
+     codespaces migrate automatically at creation), or
    - editing `backend/.env` in this codespace:
-     `DATABASE_URL=postgresql://...` (Supabase → Connect → URI works great).
-3. Run the app and open the forwarded URL:
+     `DATABASE_URL=postgresql://...` (Supabase → Connect → URI works great),
+     then `cd backend && npm run migrate` once.
+4. Run the app and open the forwarded URL:
 
    ```bash
    ./run.sh
    ```
 
 CLI alternative: `gh codespace create -r <owner>/Project_Artemus -b main`.
+The setup script itself lives in `.devcontainer/post-create.sh` — it never
+fails the container build on a bad database; migrations just wait.
 
 Codespaces idles after inactivity — after a restart, just `./run.sh` again
 (your files and `.env` persist).
@@ -50,6 +55,10 @@ npm install --prefix backend
 npm install --prefix frontend
 ./run.sh
 ```
+
+The same auto-migration trick works locally: `.devcontainer/post-create.sh`
+is a plain script — `bash .devcontainer/post-create.sh` does deps + `.env`
+seeding + migrations in one go.
 
 ---
 

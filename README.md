@@ -49,6 +49,8 @@ Once `backend/.env` has `DATABASE_URL`, this single script builds the frontend, 
 
 Prefer containers? `docker build -t questbook . && docker run -p 8080:8080 -e DATABASE_URL=... -e JWT_SECRET=... questbook` — the image migrates on start and serves the SPA from the same server.
 
+Using **GitHub Codespaces**? The dev container auto-installs dependencies, seeds `backend/.env`, and applies migrations whenever a `DATABASE_URL` Codespaces secret exists — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ### 1. Install dependencies
 
 Two package installs, one per side:

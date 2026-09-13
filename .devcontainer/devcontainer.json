@@ -6,7 +6,7 @@
     "4010": { "label": "QuestBook app (API + SPA)", "onAutoForward": "openBrowser" },
     "5173": { "label": "Vite dev server", "onAutoForward": "silent" }
   },
-  "postCreateCommand": "npm install --prefix backend && npm install --prefix frontend && cp -n backend/.env.example backend/.env || true",
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
   "customizations": {
     "vscode": {
       "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]

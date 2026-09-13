@@ -23,6 +23,36 @@ export interface GenerationOptions {
   term?: string;
   monsterDifficulty?: 'easy' | 'medium' | 'hard';
   difficultyMix?: { easy: number; medium: number; hard: number };
+  /** Teacher-chosen challenge count for THIS book (null/undefined = auto). */
+  targetCount?: number | null;
+}
+
+/** Default batch size when no teacher count is set (per chapter). */
+const DEFAULT_CHALLENGES_PER_CHAPTER = 12;
+
+/** Clamp a teacher-chosen target into the supported range. */
+export function clampTargetCount(n: unknown): number | null {
+  if (n === null || n === undefined || n === '') return null; // auto
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v) || v < 1) return null;
+  return Math.min(v, 500);
+}
+
+/**
+ * How many challenges one chapter should aim for, given the book-wide target.
+ * The per-book count is split evenly across the book's chapters (at least 1
+ * each); oversized leftovers from validation land back in the book total.
+ */
+export function perChapterTarget(targetCount: number | null | undefined, chapterCount: number): number {
+  if (!targetCount || targetCount < 1 || chapterCount < 1) return DEFAULT_CHALLENGES_PER_CHAPTER;
+  return Math.max(1, Math.ceil(targetCount / chapterCount));
+}
+
+function countDirective(target: number | undefined): string {
+  if (target && target !== DEFAULT_CHALLENGES_PER_CHAPTER) {
+    return `- Generate EXACTLY ${target} challenges for this chapter (the teacher chose this amount).`;
+  }
+  return '- Generate between 10 and 15 challenges per chapter, ordered easy to hard.';
 }
 
 const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank']);
@@ -49,7 +79,7 @@ Rules:
     }
   ]
 }
-- Generate between 10 and 15 challenges per chapter, ordered easy to hard.
+- {{CHALLENGE_COUNT}}
 - Vary the angle on each challenge: every prompt must be recognizably DIFFERENT from the others (different snippet, different blank, different distractor set) — never paraphrase the same question twice.
 - Mix types. Use the book's real code snippets — do not rewrite them except to introduce one deliberate bug for spot_the_bug.
 - Keep code snippets short (under 15 lines).`;
@@ -168,6 +198,7 @@ function difficultyDirective(opts: GenerationOptions | undefined): string {
 
 /** Generate challenges for a chapter using the LLM. Retries once on malformed JSON. */
 export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOptions): Promise<ChapterContent> {
+  const systemPrompt = SYSTEM_PROMPT.replace('{{CHALLENGE_COUNT}}', countDirective(opts?.targetCount ?? undefined));
   // Keep the prompt lean: every token must be prefilled, which is the dominant
   // cost on CPU-only inference (local Ollama). ~6k chars of text + a few code
   // blocks is plenty for grounded challenges.
@@ -187,7 +218,7 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
     try {
       // 10–15 challenges of validated JSON needs more room than the old 2000
       // cap, or truncation eats half the batch on smaller models.
-      const raw = await callLlm(SYSTEM_PROMPT, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt, 6000);
+      const raw = await callLlm(systemPrompt, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt, 6000);
       const json = extractJson(raw);
       let parsed: unknown;
       try {
@@ -207,7 +238,7 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
 // Offline heuristic fallback — deterministic, no API key needed.
 // ---------------------------------------------------------------------------
 
-export function generateHeuristically(chapter: ChapterRow): ChapterContent {
+export function generateHeuristically(chapter: ChapterRow, targetCount?: number | null): ChapterContent {
   const challenges: GeneratedChallenge[] = [];
 
   // 1) Definition sentences → fill_in_blank + multiple_choice
@@ -295,7 +326,9 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
     });
   }
 
-  return { concept: chapter.title, challenges: challenges.slice(0, 20) };
+  // Cap the output at the teacher's target (or the heuristic bench max).
+  const cap = targetCount && targetCount > 0 ? targetCount : 20;
+  return { concept: chapter.title, challenges: challenges.slice(0, Math.max(1, cap)) };
 }
 
 interface Definition {

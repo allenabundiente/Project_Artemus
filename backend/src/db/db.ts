@@ -88,11 +88,13 @@ export interface BookRow {
   filename: string;
   ownerId: string | null;
   guildId: string | null;
+  /** Teacher-chosen challenges per chapter for THIS book (null = auto). */
+  questCount: number | null;
   createdAt: Date;
 }
 
 function mapBook(r: any): BookRow {
-  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, createdAt: r.created_at };
+  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, questCount: r.quest_count ?? null, createdAt: r.created_at };
 }
 
 export interface UserRow {
@@ -163,12 +165,18 @@ function mapScore(r: any): ScoreRow {
 
 // --- books / chapters / challenges -------------------------------------------
 
-export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null): Promise<string> {
+export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null, questCount: number | null = null): Promise<string> {
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO books (title, filename, owner_id, guild_id) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [title, filename, ownerId, guildId]
+    `INSERT INTO books (title, filename, owner_id, guild_id, quest_count) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [title, filename, ownerId, guildId, questCount]
   );
   return row!.id;
+}
+
+/** Set (or clear) the per-book challenge count a teacher asked for. */
+export async function updateBookQuestCount(bookId: string, questCount: number | null): Promise<BookRow | null> {
+  const row = await queryOne(`UPDATE books SET quest_count = $2 WHERE id = $1 RETURNING *`, [bookId, questCount]);
+  return row ? mapBook(row) : null;
 }
 
 export async function insertChapter(bookId: string, idx: number, title: string, text: string, codeBlocks: CodeBlock[]): Promise<string> {

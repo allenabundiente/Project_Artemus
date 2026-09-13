@@ -1,7 +1,7 @@
 import { Router, json } from 'express';
 import multer from 'multer';
 import { parsePdf } from '../services/pdfParser.js';
-import { generateWithLlm, generateHeuristically, type ChapterContent, type GenerationOptions } from '../services/contentGenerator.js';
+import { generateWithLlm, generateHeuristically, perChapterTarget, clampTargetCount, type ChapterContent, type GenerationOptions } from '../services/contentGenerator.js';
 import { isLlmConfigured, activeProvider, llmModeLabel } from '../services/llmClient.js';
 import { computeScore, DEFAULT_SCORE_WEIGHTS, type ScoreWeights } from '../services/scoring.js';
 import { resolveTermSettings, sanitizeTermSettings, TERMS, type TermSettings } from '../services/termSettings.js';
@@ -11,7 +11,7 @@ import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
 import { registerAdminRoutes, listCustomThemes } from './admin.js';
 import {
   initDbResilient, query, queryOne, withTransaction, applyCoinsTx, insertScoreTx, upsertProgressTx,
-  insertBook, insertChapter, insertChallenge, getBook, listBooks,
+  insertBook, insertChapter, insertChallenge, getBook, listBooks, updateBookQuestCount,
   getChapters, getChapter, getChallengesForChapter, getChapterWithText,
   countChallenges, deleteChallengesForBook, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
@@ -41,10 +41,14 @@ export async function generateChallengesForBook(
   guildSettings: Record<string, unknown> | null
 ): Promise<{ challengeCount: number; llmFailures: number; mode: 'llm' | 'heuristic' }> {
   const ts = resolveTermSettings(term, guildSettings);
+  // The teacher's per-book quest count (null = auto) steers batch size.
+  const book = await getBook(bookId);
+  const target = book?.questCount ?? null;
   const genOpts: GenerationOptions = {
     term,
     monsterDifficulty: ts.monsterDifficulty,
     difficultyMix: ts.difficultyMix,
+    targetCount: target,
   };
   const chapters = await getChapters(bookId);
   const useLlm = isLlmConfigured();
@@ -54,11 +58,11 @@ export async function generateChallengesForBook(
   for (const chapter of chapters.slice(0, 12)) {
     let content: ChapterContent;
     try {
-      content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter);
+      content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter, perChapterTarget(target, chapters.length));
     } catch (e) {
       llmFailures++;
       console.error(`[generate] chapter "${chapter.title}" fell back to heuristics:`, (e as Error).message);
-      content = generateHeuristically(chapter);
+      content = generateHeuristically(chapter, perChapterTarget(target, chapters.length));
     }
     for (let i = 0; i < content.challenges.length; i++) {
       await insertChallenge({ bookId, chapterId: chapter.id, ...content.challenges[i], ord: i });
@@ -443,7 +447,8 @@ export function createApiRouter(): Router {
         const guild = await getGuildByTeacher(user.id);
         guildId = guild?.id ?? null;
       }
-      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId);
+      const questCount = clampTargetCount(req.body?.questCount);
+      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount);
       for (let i = 0; i < parsed.chapters.length; i++) {
         const ch = parsed.chapters[i];
         await insertChapter(bookId, i, ch.title, ch.text, ch.codeBlocks);
@@ -475,9 +480,15 @@ export function createApiRouter(): Router {
     }
 
     const term = typeof req.body?.term === 'string' ? req.body.term : 'prelims';
+    // A teacher may pass a new quest count on (re)generation; it persists on
+    // the book so later auto-cached runs use the same setting.
+    if (req.body?.questCount !== undefined) {
+      const updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount));
+      if (updated) book.questCount = updated.questCount;
+    }
     const guild = book.guildId ? await getGuild(book.guildId) : null;
     const result = await generateChallengesForBook(bookId, term, guild?.termSettings ?? null);
-    res.json({ bookId, cached: false, ...result });
+    res.json({ bookId, cached: false, questCount: book.questCount, ...result });
   });
 
   // --- LLM status + regenerate-all (teacher-only) --------------------------------
@@ -577,6 +588,28 @@ export function createApiRouter(): Router {
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
     await deleteChallengesForBook(bookId);
     res.json({ ok: true, note: 'Challenges cleared; call generate again.' });
+  });
+
+  /**
+   * Per-book quest settings. Today: questCount (challenges this PDF yields).
+   * null clears the override back to "auto". Editing here does NOT regenerate;
+   * the new count applies on the next (re)generation.
+   */
+  router.put('/books/:id/settings', requireAuth, async (req, res) => {
+    const bookId = String(req.params.id);
+    const book = await getBook(bookId);
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const user = await getUserById(req.user!.id);
+    const isOwner = book.ownerId === user?.id;
+    const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
+    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+
+    if (req.body?.questCount !== undefined) {
+      const updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount));
+      if (!updated) return res.status(500).json({ error: 'Could not save quest count' });
+      return res.json({ bookId, questCount: updated.questCount });
+    }
+    res.json({ bookId, questCount: book.questCount });
   });
 
   // --- Progress --------------------------------------------------------------------

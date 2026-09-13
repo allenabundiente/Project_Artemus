@@ -26,7 +26,13 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [term, setTerm] = useState<Term>('prelims');
+  /** Quest count chosen for the NEXT upload ('' = auto). */
+  const [uploadQuestCount, setUploadQuestCount] = useState('');
+  /** Per-tome quest count edits (bookId → select value, '' = auto). */
+  const [bookCounts, setBookCounts] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const QUEST_COUNT_CHOICES = ['5', '8', '10', '12', '15', '20', '30', '40', '50'];
 
   const refreshGuildData = useCallback(async () => {
     setError(null);
@@ -97,10 +103,30 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     setNotice(null);
     setBusy('Deciphering the ancient tome…');
     try {
-      const up = await api.uploadPdf(file);
+      const questCount = uploadQuestCount ? Number(uploadQuestCount) : null;
+      const up = await api.uploadPdf(file, questCount);
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
       setNotice(`"${up.title}" is ready for your adventurers — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
+      await refreshGuildData();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Apply a tome's new quest count and regenerate its challenges. */
+  async function handleBookCount(book: BookMeta) {
+    const value = bookCounts[book.id] ?? (book.questCount != null ? String(book.questCount) : '');
+    const next = value ? Number(value) : null;
+    setError(null);
+    setBusy(`Re-summoning "${book.title}"…`);
+    try {
+      await api.setBookQuestCount(book.id, next);
+      await api.regenerateBook(book.id);
+      const gen = await api.generateChallenges(book.id, term);
+      setNotice(`"${book.title}" now holds ${gen.challengeCount} monsters.`);
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -182,11 +208,23 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                     <option key={t} value={t}>{t.toUpperCase()}</option>
                   ))}
                 </select>
+                <select
+                  className="pixel-select"
+                  value={uploadQuestCount}
+                  onChange={(e) => setUploadQuestCount(e.target.value)}
+                  style={{ marginRight: '0.4rem' }}
+                  title="How many monsters this tome summons (per book)"
+                >
+                  <option value="">QUESTS: AUTO</option>
+                  {QUEST_COUNT_CHOICES.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
                 <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>
                   {busy ?? 'UPLOAD QUEST (PDF)'}
                 </button>
                 <p className="term-font" style={{ color: 'var(--d-stone-light)', marginBottom: 0, marginTop: '0.5rem' }}>
-                  Monsters are generated using the selected term's difficulty settings.
+                  Monsters are generated using the selected term's difficulty settings. "Quests: Auto" picks a sensible amount per tome.
                 </p>
               </div>
 
@@ -218,9 +256,35 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                 <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>ASSIGNED TOMES</p>
                 {books.length === 0 && <p className="status-text" style={{ margin: 0 }}>No tomes assigned yet.</p>}
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                  {books.map((b) => (
-                    <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>▸ {b.title}</li>
-                  ))}
+                  {books.map((b) => {
+                    const current = bookCounts[b.id] ?? (b.questCount != null ? String(b.questCount) : '');
+                    return (
+                      <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span style={{ flex: 1, minWidth: '8rem' }}>▸ {b.title}</span>
+                        <select
+                          className="pixel-select"
+                          style={{ fontSize: '0.6rem' }}
+                          value={current}
+                          title="Monsters per tome (AUTO picks by length)"
+                          onChange={(e) => setBookCounts((m) => ({ ...m, [b.id]: e.target.value }))}
+                        >
+                          <option value="">AUTO</option>
+                          {QUEST_COUNT_CHOICES.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                        <button
+                          className="pixel-btn pixel-btn--ghost"
+                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                          disabled={!!busy || current === (b.questCount != null ? String(b.questCount) : '')}
+                          title="Apply this count and re-summon the tome's monsters"
+                          onClick={() => void handleBookCount(b)}
+                        >
+                          ⟳ RE-SUMMON
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             </>

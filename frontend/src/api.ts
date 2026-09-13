@@ -145,15 +145,26 @@ export async function getTermSettings(term: string): Promise<{ term: string; set
 
 // --- books -------------------------------------------------------------------------
 
-export async function uploadPdf(file: File): Promise<UploadResult> {
+export async function uploadPdf(file: File, questCount?: number | null): Promise<UploadResult> {
   const form = new FormData();
   form.append('pdf', file);
+  if (questCount != null) form.append('questCount', String(questCount));
   const res = await fetch('/api/upload', { method: 'POST', body: form, headers: authHeaders() });
   return json<UploadResult>(res);
 }
 
-export async function generateChallenges(bookId: string, term: string = 'prelims'): Promise<GenerateResult> {
-  return send<GenerateResult>(`/api/books/${bookId}/generate`, 'POST', { term });
+export async function generateChallenges(bookId: string, term: string = 'prelims', questCount?: number | null): Promise<GenerateResult> {
+  return send<GenerateResult>(`/api/books/${bookId}/generate`, 'POST', { term, ...(questCount !== undefined ? { questCount } : {}) });
+}
+
+/** Read or set a book's per-PDF quest settings (quest count; null = auto). */
+export async function setBookQuestCount(bookId: string, questCount: number | null): Promise<{ bookId: string; questCount: number | null }> {
+  return send(`/api/books/${bookId}/settings`, 'PUT', { questCount });
+}
+
+/** Wipe a book's challenges so the next generate() rebuilds them. */
+export async function regenerateBook(bookId: string): Promise<{ ok: boolean }> {
+  return send(`/api/books/${bookId}/regenerate`, 'POST');
 }
 
 export async function listBooks(): Promise<BookMeta[]> {

@@ -55,6 +55,8 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [term, setTerm] = useState<Term>('prelims');
+  /** Quest count for the NEXT upload ('' = auto). */
+  const [uploadQuestCount, setUploadQuestCount] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const refreshBooks = useCallback(async () => {
@@ -113,7 +115,8 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
     setNotice(null);
     setBusy('Deciphering the ancient tome…');
     try {
-      const up = await api.uploadPdf(file);
+      const questCount = uploadQuestCount ? Number(uploadQuestCount) : null;
+      const up = await api.uploadPdf(file, questCount);
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
       setNotice(`"${up.title}" is ready — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
@@ -219,6 +222,18 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
                 <select className="pixel-select" value={term} onChange={(e) => setTerm(e.target.value as Term)} style={{ marginRight: '0.4rem' }}>
                   {(['prelims', 'midterms', 'semis', 'finals'] as Term[]).map((t) => (
                     <option key={t} value={t}>{t.toUpperCase()}</option>
+                  ))}
+                </select>
+                <select
+                  className="pixel-select"
+                  value={uploadQuestCount}
+                  onChange={(e) => setUploadQuestCount(e.target.value)}
+                  style={{ marginRight: '0.4rem' }}
+                  title="How many monsters this tome summons (per book)"
+                >
+                  <option value="">QUESTS: AUTO</option>
+                  {['5', '8', '10', '12', '15', '20', '30', '40', '50'].map((c) => (
+                    <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
                 <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>

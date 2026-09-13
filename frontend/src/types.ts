@@ -19,6 +19,8 @@ export interface BookMeta {
   filename: string;
   ownerId: string | null;
   guildId: string | null;
+  /** Teacher-chosen challenge count for this PDF (null = auto). */
+  questCount: number | null;
   createdAt: string;
 }
 

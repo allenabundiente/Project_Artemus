@@ -23,6 +23,11 @@ export default function TouchControls({ engine }: Props) {
   // drop every flag so the knight doesn't keep running into a wall.
   useEffect(() => () => engine?.clearTouchInput(), [engine]);
 
+  /** Short buzz on press (Android/Chrome; iOS Safari ignores it silently). */
+  function buzz(ms = 12) {
+    try { navigator.vibrate?.(ms); } catch { /* unsupported — fine */ }
+  }
+
   function apply(next: Partial<typeof heldRef.current>) {
     heldRef.current = { ...heldRef.current, ...next };
     engine?.setTouchInput(heldRef.current);
@@ -32,6 +37,7 @@ export default function TouchControls({ engine }: Props) {
     return (e: React.PointerEvent<HTMLButtonElement>) => {
       e.preventDefault();
       e.currentTarget.setPointerCapture?.(e.pointerId);
+      buzz(key === 'jump' ? 18 : 10);
       apply({ [key]: true });
     };
   }
@@ -43,10 +49,12 @@ export default function TouchControls({ engine }: Props) {
     };
   }
 
+  // 64px square (well past the 44px minimum, comfortably thumb-sized); JUMP
+  // is wider — it's the most-pressed button mid-fight.
   const btn: React.CSSProperties = {
     width: 64,
     height: 64,
-    fontSize: '1.3rem',
+    fontSize: '1.5rem',
     lineHeight: 1,
     userSelect: 'none',
     WebkitUserSelect: 'none',
@@ -96,7 +104,7 @@ export default function TouchControls({ engine }: Props) {
         type="button"
         aria-label="Jump"
         className="pixel-btn pixel-btn--primary touch-btn touch-btn--jump"
-        style={{ ...btn, width: 84 }}
+        style={{ ...btn, width: 104, height: 72 }}
         onPointerDown={press('jump')}
         onPointerUp={release('jump')}
         onPointerLeave={release('jump')}

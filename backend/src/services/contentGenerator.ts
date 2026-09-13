@@ -1,5 +1,9 @@
 import { callLlm, LlmError } from './llmClient.js';
 import type { ChapterRow, CodeBlock } from '../db/types.js';
+import { initPlugins, resolvePluginFor, pluginById, promptDirectiveFor, validateWithPlugin } from '../plugins/index.js';
+import type { QuizMode } from '../plugins/types.js';
+
+export type { QuizMode } from '../plugins/types.js';
 
 export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
 
@@ -32,39 +36,17 @@ export interface GenerationOptions {
 /** Default batch size when no teacher count is set (per chapter). */
 const DEFAULT_CHALLENGES_PER_CHAPTER = 12;
 
-/** Quiz mode for a book: general subjects vs. code-flavored questions. */
-export type QuizMode = 'general' | 'programming';
-
 /**
- * Filename pattern that flips a PDF into programming mode. Configurable so
- * deployments can follow their own naming convention — the default matches
- * `topicname_code.pdf` (python_chapter1_code.pdf) and close cousins like
- * `_code.pdf`, `-code.pdf`, or a bare `_code` suffix. Override with the
- * QUESTBOOK_CODE_FILE_PATTERN env var (any valid JS regex source).
- */
-export const DEFAULT_CODE_FILE_PATTERN = '(?:[_-]code|code[_-]?)$';
-
-export function codeFilePattern(): RegExp {
-  const src = process.env.QUESTBOOK_CODE_FILE_PATTERN || DEFAULT_CODE_FILE_PATTERN;
-  try {
-    return new RegExp(src, 'i');
-  } catch {
-    console.warn(`[contentGenerator] invalid QUESTBOOK_CODE_FILE_PATTERN (${src}); using default`);
-    return new RegExp(DEFAULT_CODE_FILE_PATTERN, 'i');
-  }
-}
-
-/**
- * Decide a book's quiz mode: explicit teacher choice wins; otherwise detect
- * from the filename. `${topic}_code.pdf` → programming; everything else →
- * general (any subject).
+ * Decide a book's quiz mode via the PLUGIN registry: explicit teacher choice
+ * wins; otherwise the first enabled plugin whose detect() matches the filename
+ * claims it (the `_code.pdf` convention is just the `programming` plugin's
+ * rule). Unmatched uploads fall back to `general`.
  */
 export function detectQuizMode(filename: string, explicit?: unknown): QuizMode {
   if (explicit === 'programming' || explicit === 'general') return explicit;
-  const stem = filename.replace(/\.pdf$/i, '');
-  // Also match the stem BEFORE the pattern so "python_code_ch1" works, not
-  // just suffix conventions: pattern may match anywhere in the stem.
-  return codeFilePattern().test(stem) ? 'programming' : 'general';
+  initPlugins();
+  const plugin = resolvePluginFor(filename, filename.replace(/\.pdf$/i, ''));
+  return (plugin.id === 'programming' ? 'programming' : 'general') as QuizMode;
 }
 
 /** Clamp a teacher-chosen target into the supported range. */
@@ -92,17 +74,14 @@ function countDirective(target: number | undefined): string {
   return '- Generate between 10 and 15 challenges per chapter, ordered easy to hard.';
 }
 
-const PROGRAMMING_MODE_DIRECTIVE = `\n\nPROGRAMMING MODE: this book teaches code. Favor these angles, all grounded in the chapter's own text and snippets:
-- predict_output — "what does this snippet print/return?" using the book's real code.
-- fill_in_blank — remove ONE token from a real snippet and ask what completes it.
-- spot_the_bug — introduce exactly one realistic bug (wrong operator, off-by-one, missing symbol) and ask which line is wrong.
-- multiple_choice — syntax, semantics, and "why" questions about the snippets.
-Keep any non-code challenges (true_false / short_answer) anchored to technical facts in the text.`;
-
-const GENERAL_MODE_DIRECTIVE = `\n\nGENERAL MODE: this book may be about any subject (history, biology, literature, …). Build every challenge from THIS text's own facts, names, events, definitions, and relationships. Distractors must come from the same document's adjacent concepts — no generic trivia.`;
-
-function modeDirective(mode: QuizMode | undefined): string {
-  return mode === 'programming' ? PROGRAMMING_MODE_DIRECTIVE : GENERAL_MODE_DIRECTIVE;
+/**
+ * Mode → plugin. The directive text itself lives in the plugins
+ * (promptDirective); this only resolves which plugin to ask. An explicit
+ * teacher-chosen mode maps by id, bypassing filename detection.
+ */
+function pluginForMode(mode: QuizMode | undefined) {
+  initPlugins();
+  return pluginById(mode === 'programming' ? 'programming' : 'general');
 }
 
 const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank', 'true_false', 'short_answer']);
@@ -255,7 +234,18 @@ function difficultyDirective(opts: GenerationOptions | undefined): string {
 
 /** Generate challenges for a chapter using the LLM. Retries once on malformed JSON. */
 export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOptions): Promise<ChapterContent> {
-  const systemPrompt = SYSTEM_PROMPT.replace('{{CHALLENGE_COUNT}}', countDirective(opts?.targetCount ?? undefined)) + modeDirective(opts?.quizMode);
+  initPlugins();
+  const plugin = pluginForMode(opts?.quizMode);
+  const pluginCtx = {
+    chapter,
+    targetCount: opts?.targetCount ?? null,
+    perChapterTarget: perChapterTarget(opts?.targetCount ?? null, 1),
+    difficulty: { monsterDifficulty: opts?.monsterDifficulty, difficultyMix: opts?.difficultyMix },
+    term: opts?.term,
+  };
+  const systemPrompt =
+    SYSTEM_PROMPT.replace('{{CHALLENGE_COUNT}}', countDirective(opts?.targetCount ?? undefined)) +
+    promptDirectiveFor(plugin, pluginCtx);
   // Keep the prompt lean: every token must be prefilled, which is the dominant
   // cost on CPU-only inference (local Ollama). ~6k chars of text + a few code
   // blocks is plenty for grounded challenges.
@@ -283,7 +273,15 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
       } catch {
         parsed = JSON.parse(repairJson(json)); // small models emit near-JSON
       }
-      return validateGenerated(parsed);
+      const content = validateGenerated(parsed);
+      // Plugin-level validation: each mode may veto/repair challenges that
+      // don't fit it (e.g. code questions without code). Keep at least the
+      // core-validated survivors; fall back to the unfiltered set if a strict
+      // plugin rejects everything.
+      const filtered = content.challenges
+        .map((c) => validateWithPlugin(plugin, c, pluginCtx))
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+      return filtered.length > 0 ? { concept: content.concept, challenges: filtered } : content;
     } catch (e) {
       lastErr = e as Error;
     }

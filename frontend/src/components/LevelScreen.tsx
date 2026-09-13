@@ -9,6 +9,7 @@ import { sfx } from '../game/sfx';
 import { loadCustomThemes } from '../game/themes';
 import BattleScreen from './BattleScreen';
 import TouchControls from './TouchControls';
+import LandscapeHint from './LandscapeHint';
 
 interface Props {
   bookId: string;
@@ -350,6 +351,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
       <canvas id="game-canvas" ref={canvasRef} />
 
       {isTouch && phase === 'playing' && <TouchControls engine={engineRef.current} />}
+      <LandscapeHint active={phase === 'playing'} />
 
       {phase === 'battle' && planRef.current && (
         <div className="modal-overlay">

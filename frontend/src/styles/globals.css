@@ -453,6 +453,42 @@ canvas {
   -webkit-user-select: none;
 }
 
+/* Active D-pad feedback: a pressed direction visibly lights up (also gives
+   fine-pointer users testing with a mouse the same cue). */
+.touch-btn:active {
+  filter: brightness(1.25);
+  transform: translateY(2px);
+}
+
+/* Rotate-your-phone hint: floats over the canvas, tappable to dismiss. */
+.landscape-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.6rem 1rem;
+  background: rgba(20, 14, 28, 0.92);
+  border: 2px solid var(--d-gold);
+  color: var(--d-gold);
+  animation: hint-bob 1.6s ease-in-out infinite;
+}
+
+@keyframes hint-bob {
+  0%, 100% { transform: translateX(-50%) translateY(0); }
+  50% { transform: translateX(-50%) translateY(-6px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landscape-hint {
+    animation: none;
+  }
+}
+
 /* Comfortable hit targets on coarse pointers (Apple/Google 44px guidance)
    without changing desktop layout — applies only to touch devices. */
 @media (pointer: coarse) {
@@ -460,6 +496,9 @@ canvas {
   .option-btn,
   .pixel-select {
     min-height: 44px;
+  }
+  .pixel-btn {
+    font-size: 1rem; /* was 0.55–0.8rem inline on some buttons — keep tappable text */
   }
   .pixel-input {
     min-height: 46px;
@@ -477,6 +516,19 @@ canvas {
   .dialog-box {
     max-width: 100% !important;
     margin: 0 0.5rem !important;
+  }
+  /* Battle dialogs must fit a short phone viewport: modal-overlay already
+     centers and scrolls, but the monster stage wastes vertical space —
+     tighten paddings so the answer options sit above the fold. */
+  .modal-overlay {
+    padding: 0.5rem;
+    align-items: flex-start; /* scroll from the top on tiny screens */
+  }
+  .modal-overlay > .dialog-box {
+    max-height: calc(100dvh - 1rem); /* dvh: mobile URL bar collapses */
+  }
+  .title-screen h1 {
+    font-size: 1.9rem; /* fits 320–375px widths with the shadow intact */
   }
   .gameover-panel {
     margin: 0 0.75rem;

@@ -288,7 +288,7 @@ export async function setFeatureLock(key: string, locked: boolean): Promise<Feat
   return send(`/api/admin/features/${key}`, 'PUT', { locked });
 }
 
-export async function getAdminSprites(): Promise<{ manifest: Record<string, { width: number; height: number }>; files: string[] }> {
+export async function getAdminSprites(): Promise<{ manifest: Record<string, { width: number; height: number }>; files: string[]; custom?: string[] }> {
   return get('/api/admin/sprites');
 }
 

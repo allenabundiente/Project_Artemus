@@ -1,0 +1,60 @@
+# ============================================================
+# QuestBook — Render Blueprint (one file, one service)
+# ============================================================
+# Deploy: Render dashboard → New → Blueprint → pick this repo.
+# Render reads this file and creates everything below.
+#
+# What you get:
+#   • ONE web service serving the SPA + API on a single port
+#     (the Dockerfile builds the frontend and serves it from
+#     backend/public — same shape as `./run.sh` production mode)
+#   • Migrations run automatically on every boot (idempotent,
+#     tracked in schema_migrations — safe on every deploy)
+#   • /health as the Render health check (reports DB + LLM mode)
+#
+# What you paste in once, at sync time:
+#   • DATABASE_URL  — your Supabase Postgres URI (see README)
+# JWT_SECRET is generated for you by Render. LLM keys are
+# optional — add them later in the service's Environment tab;
+# without them the app generates challenges via offline heuristics.
+# ============================================================
+
+services:
+  - type: web
+    name: questbook
+    runtime: docker
+    dockerfilePath: ./Dockerfile   # builds frontend → backend/public, serves both on one port
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    # Deploy only when the repo's CI (typecheck + build + Docker) is green.
+    autoDeployTrigger: checksPass
+
+    envVars:
+      # Paste your Supabase connection string when Render prompts you.
+      # For this long-lived Express server, the DIRECT connection
+      # (port 5432) is recommended — see backend/.env.example.
+      - key: DATABASE_URL
+        sync: false
+
+      # Render generates a strong random secret on first sync.
+      - key: JWT_SECRET
+        generateValue: true
+
+      - key: NODE_ENV
+        value: production
+
+      # ⚠️ Do NOT set API_PORT here. The backend prefers API_PORT over
+      # PORT, and Render binds your service to the PORT it injects
+      # (server.ts reads both; injected PORT wins as long as API_PORT
+      # is unset).
+
+      # --- Optional LLM challenge generation --------------------------
+      # Add any of these later via Dashboard → questbook → Environment.
+      # Unset/empty = offline heuristic generation (no API calls).
+      #
+      #   ANTHROPIC_API_KEY   (paid, best quality — Claude)
+      #   OPENAI_BASE_URL     (free OpenAI-compatible providers:
+      #                        OpenRouter / Gemini / Groq / Ollama)
+      #   OPENAI_API_KEY
+      #   LLM_MODEL

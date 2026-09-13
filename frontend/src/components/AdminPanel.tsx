@@ -69,13 +69,16 @@ function FeaturesTab() {
 
 function SpritesTab() {
   const [files, setFiles] = useState<string[]>([]);
+  const [custom, setCustom] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [, force] = useState(0);
 
   useEffect(() => {
-    api.getAdminSprites().then((s) => setFiles(s.files)).catch(() => setFiles([]));
+    api.getAdminSprites()
+      .then((s) => { setFiles(s.files); setCustom(s.custom ?? []); })
+      .catch(() => { setFiles([]); setCustom([]); });
   }, []);
 
   async function restore(slot: string) {
@@ -105,11 +108,12 @@ function SpritesTab() {
       {notice && <p className="status-text">{notice}</p>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.5rem' }}>
         {shown.map((slot) => (
-          <SpriteCell key={slot} slot={slot} busy={busy === slot} onRestore={() => void restore(slot)} onUpload={async (file) => {
+          <SpriteCell key={slot} slot={slot} busy={busy === slot} custom={custom.includes(slot)} onRestore={() => void restore(slot)} onUpload={async (file) => {
             setBusy(slot);
             try {
               await api.uploadSprite(slot, file);
               setNotice(`${slot} updated — refresh a quest to see it.`);
+              setCustom((c) => (c.includes(slot) ? c : [...c, slot]));
               force((n) => n + 1);
             } catch (e) {
               setNotice((e as Error).message);
@@ -123,11 +127,16 @@ function SpritesTab() {
   );
 }
 
-function SpriteCell({ slot, busy, onRestore, onUpload }: { slot: string; busy: boolean; onRestore: () => void; onUpload: (f: File) => void }) {
+function SpriteCell({ slot, busy, custom, onRestore, onUpload }: { slot: string; busy: boolean; custom: boolean; onRestore: () => void; onUpload: (f: File) => void }) {
   return (
     <div style={{ textAlign: 'center', border: '1px solid rgba(255,255,255,0.15)', padding: '0.4rem' }}>
-      <img src={spriteDataUrl(slot)} alt={slot} style={{ width: 48, height: 48, imageRendering: 'pixelated', objectFit: 'contain' }}
-        onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+      <img
+        src={custom ? `/api/sprites/${encodeURIComponent(slot)}.png` : spriteDataUrl(slot)}
+        alt={slot}
+        title={custom ? 'Custom art (stored server-side)' : 'Built-in grid art'}
+        style={{ width: 48, height: 48, imageRendering: 'pixelated', objectFit: 'contain' }}
+        onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+      />
       <p className="term-font" style={{ fontSize: '0.7rem', margin: '0.25rem 0', wordBreak: 'break-all' }}>{slot}</p>
       <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
         <label className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem', cursor: busy ? 'wait' : 'pointer' }}>

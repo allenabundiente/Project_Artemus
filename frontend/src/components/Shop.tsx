@@ -83,7 +83,7 @@ export default function Shop({ user, onUserUpdated }: Props) {
     }
   }
 
-  const categories: ShopItem['category'][] = ['hair', 'armor', 'helmet', 'pack'];
+  const categories: ShopItem['category'][] = ['hair', 'armor', 'helmet', 'cape', 'pack'];
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>

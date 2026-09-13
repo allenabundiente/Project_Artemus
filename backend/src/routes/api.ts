@@ -8,7 +8,7 @@ import { resolveTermSettings, sanitizeTermSettings, TERMS, type TermSettings } f
 import { buildLessonOverview } from '../services/lesson.js';
 import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, signToken } from '../services/auth.js';
 import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
-import { registerAdminRoutes, listCustomThemes } from './admin.js';
+import { registerAdminRoutes, fetchCustomThemes } from './admin.js';
 import {
   initDbResilient, query, queryOne, withTransaction, applyCoinsTx, insertScoreTx, upsertProgressTx,
   insertBook, insertChapter, insertChallenge, getBook, listBooks, updateBookQuestCount, updateBookQuizMode,
@@ -236,36 +236,31 @@ export function createApiRouter(): Router {
   // Which map themes exist (used by teacher skin picker + admin panel): the
   // static built-ins plus admin-defined custom themes (colors + sprite swaps
   // persisted backend-side, registered into the game at quest start).
-  router.get('/themes', requireAuth, (_req, res) => {
+  router.get('/themes', requireAuth, async (_req, res) => {
     res.json({
       themes: [
         { id: 'dungeon', name: 'Dungeon Night', builtin: true },
         { id: 'forest', name: 'Firefly Glade', builtin: true },
-        ...listCustomThemes().map((t) => ({ id: t.id, name: String(t.name ?? t.id), builtin: false })),
+        ...(await fetchCustomThemes()).map((t) => ({ id: t.id, name: String(t.name ?? t.id), builtin: false })),
       ],
     });
   });
 
-  registerAdminRoutes(router);
+  registerAdminRoutes(router, { importLegacyThemes: true });
 
   // --- map (theme) resolution ---------------------------------------------------
   //
   // Resolution order: teacher's guild skin → admin global config →
   // random by difficulty (deterministic per chapter+difficulty so all students
   // in the same chapter+difficulty see the same realm, and revisits match).
-  const DIFFICULTY_THEMES: Record<string, string[]> = {
+  // Custom themes join the random pools so admins' maps appear without a
+  // teacher pinning them. Fetched per request (DB-backed, so custom themes
+  // survive redeploys) and merged into the built-in difficulty pools.
+  const BUILTIN_DIFFICULTY_THEMES: Record<string, string[]> = {
     easy: ['forest', 'dungeon'],
     medium: ['dungeon', 'forest'],
     hard: ['dungeon'],
   };
-  // Custom themes join the random pools so admins' maps appear without a
-  // teacher pinning them.
-  const customIds = listCustomThemes().map((t) => t.id);
-  if (customIds.length > 0) {
-    DIFFICULTY_THEMES.easy = [...DIFFICULTY_THEMES.easy, ...customIds];
-    DIFFICULTY_THEMES.medium = [...DIFFICULTY_THEMES.medium, ...customIds];
-    DIFFICULTY_THEMES.hard = [...DIFFICULTY_THEMES.hard, ...customIds];
-  }
   router.get('/map/resolve', requireAuth, async (req, res) => {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -279,13 +274,15 @@ export function createApiRouter(): Router {
     const cfg = await getGlobalMapConfig();
     if (cfg.mode === 'fixed') {
       // A pinned theme may have been deleted since — verify it still exists.
-      const known = ['dungeon', 'forest'].includes(cfg.fixedTheme) || listCustomThemes().some((t) => t.id === cfg.fixedTheme);
+      const known = ['dungeon', 'forest'].includes(cfg.fixedTheme) || (await fetchCustomThemes()).some((t) => t.id === cfg.fixedTheme);
       if (known) return res.json({ theme: cfg.fixedTheme, source: 'admin' as const });
     }
 
     // 3. Random by difficulty — deterministic hash so revisits agree.
     const diff = typeof req.query.difficulty === 'string' ? req.query.difficulty : 'medium';
-    const pool = DIFFICULTY_THEMES[diff] ?? DIFFICULTY_THEMES.medium;
+    const base = BUILTIN_DIFFICULTY_THEMES[diff] ?? BUILTIN_DIFFICULTY_THEMES.medium;
+    const customIds = (await fetchCustomThemes()).map((t) => t.id);
+    const pool = customIds.length > 0 ? [...base, ...customIds] : base;
     let h = 0;
     const seed = `${String(req.query.chapterId ?? '')}:${diff}`;
     for (let i = 0; i < seed.length; i++) h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;

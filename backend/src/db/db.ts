@@ -43,6 +43,12 @@ export async function query<T extends pg.QueryResultRow>(sql: string, params: un
   return res.rows;
 }
 
+/** Run a write statement (INSERT/UPDATE/DELETE) and return the affected row count. */
+export async function execute(sql: string, params: unknown[] = []): Promise<number> {
+  const res = await pool.query(sql, params);
+  return res.rowCount ?? 0;
+}
+
 /**
  * Anything that can run parameterized queries: the shared pool, or a client
  * enrolled in an open transaction (see withTransaction).

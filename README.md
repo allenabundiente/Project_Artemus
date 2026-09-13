@@ -27,7 +27,7 @@ It's built for two kinds of people:
 - **Dungeon boss** — the castle gate wakes the boss: hardest questions first, a 3-hit HP bar. Win and the quest clears, the treasure drops.
 - **Scoring** — per quest it's basically `base − mistakes·penalty − (over par ? penalty) − (incomplete ? penalty) − (out of life ? penalty) + lives·bonus`, scaled by the term's points multiplier. Cumulative per-term score pushes you up through Copper → Iron → Gold → Diamond → Mythril with pixel shield-crest badges.
 - **Leaderboards** — guild or global, all-time or per-term.
-- **Coin economy (foundation)** — coins drop on quest completion (flat + flawless + full-life bonuses), persist across terms, show up on the HUD. The shop route is a "Coming Soon" placeholder for now.
+- **Coin economy** — coins drop on quest completion (flat + flawless + full-life bonuses), persist across terms, show up on the HUD, and are spendable in **the Royal Shop**: cosmetic hair, armor, helmet, and cape sets that unlock in the wardrobe forever (cosmetics only — never gameplay power).
 
 ### Controls
 
@@ -48,6 +48,19 @@ Once `backend/.env` has `DATABASE_URL`, this single script builds the frontend, 
 ```
 
 Prefer containers? `docker build -t questbook . && docker run -p 8080:8080 -e DATABASE_URL=... -e JWT_SECRET=... questbook` — the image migrates on start and serves the SPA from the same server.
+
+#### Deploying to Render
+
+The repo ships a [Render Blueprint](https://render.com/docs/blueprint-spec) (`render.yaml`) that stands the whole thing up as **one free-tier web service** — the Docker image builds the frontend, serves the SPA + API on a single port, and applies migrations automatically on every boot.
+
+1. Push this repo to GitHub and open <https://dashboard.render.com/select-repo-or-blank> → **New → Blueprint** → pick the repo. Render reads `render.yaml` and shows you what it will create.
+2. When prompted, paste your **`DATABASE_URL`** (the Supabase connection string from step 2 above — for this long-lived server, the **direct** connection, port 5432, is recommended over the pooled one). `JWT_SECRET` is generated for you. `PORT` is injected by Render and `server.ts` already honors it; just don't set `API_PORT`.
+3. Deploy. Health check is `GET /health` (reports DB + LLM mode), and with `autoDeployTrigger: checksPass` each push deploys only after CI is green.
+
+Two Render-free-tier caveats worth knowing:
+
+- **Free instances spin down** after ~15 minutes of inactivity — the first visitor after a nap waits ~50 seconds for boot. The DB state is safe (it lives in Supabase); only the wait is real.
+- **The filesystem is ephemeral.** That's fine now: PDF books, challenges, scores, users, shop purchases, and admin-uploaded sprites/animations/custom themes all live in Postgres (admin uploads land in the `admin_assets` table and are served back through `/api/sprites/*` and `/api/animations`), so redeploys wipe nothing that matters.
 
 Using **GitHub Codespaces**? The dev container auto-installs dependencies, seeds `backend/.env`, and applies migrations whenever a `DATABASE_URL` Codespaces secret exists — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -322,7 +335,7 @@ When you add something big (a shop that actually sells things, achievements, a n
 
 A couple of current extension points already exist and are ready for you to finish:
 
-- **The shop** is a placeholder. Coins already persist server-side and show on the HUD. Making them spendable is one join table and a couple of routes away — no engine changes.
+- **Consumable / non-cosmetic shop items** — the purchase pipeline (atomic transaction, inventory, wardrobe enforcement) is general; new item categories are a migration widening `shop_items.category`, a seed, and UI.
 - **Per-guild rank overrides** are a future extension. Right now rank thresholds are global defaults stored in `rank_tiers`. Per-guild overrides mean one more table (or columns) and a small bit of logic in the score/rank path.
 - **Cosmetics / player-chosen skins** are already sketched in `docs/ASSET_GUIDE.md`. The registry is structured for it — a pack is just the same shape a theme uses, with one text column on `users` for the chosen id.
 
@@ -358,5 +371,5 @@ See **`docs/ASSET_GUIDE.md`** for the full, detailed art guide. The short versio
 - **Scanned / image-only PDFs are rejected** with a clear error — there's no OCR.
 - **Heuristic mode is intentionally shallow.** The intended quality comes from LLM mode.
 - **Rank thresholds are global defaults** — per-guild overrides are an extension, not done yet.
-- **The shop is a placeholder** — coins accrue but can't be spent yet.
+- **The shop sells cosmetics** (hair / armor / helmet / cape sets), enforced server-side in the wardrobe. Consumables and non-cosmetic categories are an extension, not done yet.
 - **Other obvious next steps** (pick whichever fits the project): real shop purchases, player cosmetics, more battle question types, new difficulty and monster variants, richer platforming, subtitle/alt-text for accessibility, anime-style or non-medieval themes, and anything multiplayer or social that makes guilds feel more alive.

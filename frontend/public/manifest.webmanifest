@@ -1,0 +1,17 @@
+{
+  "name": "QuestBook",
+  "short_name": "QuestBook",
+  "description": "Turn any PDF into a retro arcade quest — fight monsters with what you've learned.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#2a1f2e",
+  "theme_color": "#2a1f2e",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

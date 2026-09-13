@@ -1,7 +1,7 @@
 {
-  "name": "codebook-arcade-backend",
+  "name": "questbook-backend",
   "version": "0.1.0",
-  "description": "PDF-to-retro-game learning backend: parses programming books and generates educational game challenges",
+  "description": "PDF-to-retro-game learning backend: parses books and documents and generates educational game challenges",
   "type": "module",
   "main": "src/server.ts",
   "scripts": {

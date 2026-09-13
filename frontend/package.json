@@ -1,7 +1,7 @@
 {
-  "name": "codebook-arcade-frontend",
+  "name": "questbook-frontend",
   "version": "0.1.0",
-  "description": "Retro pixel-art arcade game that teaches programming from uploaded PDF books",
+  "description": "Retro pixel-art arcade game that teaches from uploaded PDF books and documents",
   "private": true,
   "type": "module",
   "scripts": {

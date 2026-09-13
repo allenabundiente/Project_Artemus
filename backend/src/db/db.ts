@@ -6,7 +6,7 @@ import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow } from './types.j
 
 export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow } from './types.js';
 
-const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/codebook_arcade';
+const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/questbook';
 
 export const pool = new pg.Pool({
   connectionString,

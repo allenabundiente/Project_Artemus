@@ -28,7 +28,7 @@ export interface GenerationOptions {
 const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank']);
 const VALID_DIFFICULTY = new Set(['easy', 'medium', 'hard']);
 
-const SYSTEM_PROMPT = `You are the content engine for "CodeBook Arcade", a retro arcade game that teaches programming from real textbook material.
+const SYSTEM_PROMPT = `You are the content engine for "QuestBook", a retro arcade game that teaches real material from uploaded books and documents.
 
 Your job: take a chapter of a programming book and turn its actual content into game challenges. Ground EVERY challenge in the text or code you are given. Never invent concepts, syntax, or APIs that are not present in the source material.
 

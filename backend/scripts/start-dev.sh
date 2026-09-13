@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the CodeBook Arcade backend detached, on API_PORT (default 4010).
+# Starts the QuestBook backend detached, on API_PORT (default 4010).
 cd "$(dirname "$0")/.."
 API_PORT="${API_PORT:-4010}"
 export API_PORT

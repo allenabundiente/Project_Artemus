@@ -15,7 +15,7 @@ app.get('/health', (_req, res) => res.json({ ok: true, llm: llmModeLabel(), db: 
 app.use('/api', createApiRouter());
 
 app.listen(PORT, () => {
-  console.log(`[codebook-arcade] backend listening on http://localhost:${PORT}`);
-  console.log(`[codebook-arcade] LLM mode: ${llmModeLabel()}`);
-  console.log(`[codebook-arcade] DB mode: ${process.env.DATABASE_URL ? 'Supabase/Postgres' : 'local Postgres (set DATABASE_URL)'}`);
+  console.log(`[questbook] backend listening on http://localhost:${PORT}`);
+  console.log(`[questbook] LLM mode: ${llmModeLabel()}`);
+  console.log(`[questbook] DB mode: ${process.env.DATABASE_URL ? 'Supabase/Postgres' : 'local Postgres (set DATABASE_URL)'}`);
 });

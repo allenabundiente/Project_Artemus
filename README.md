@@ -1,8 +1,10 @@
-# CodeBook Arcade
+# QuestBook
+
+> *(formerly CodeBook Arcade — if you have an old clone or bookmark, pull the latest and you're up to date; the app itself is a single-page app, so no link paths changed)*
 
 > Hi, I'm Richard — or, as I like to call myself, **Artemus** (my artist name).
 >
-> This is **CodeBook Arcade** *(working title — not the final name yet)*: a personal project I've been building as a pressure valve for my frustration with college professors who have the knowledge but not the energy to teach it properly. The idea is simple — if the lecture isn't going to hold my attention, maybe a dungeon will.
+> This is **QuestBook**: a personal project I've been building as a pressure valve for my frustration with college professors who have the knowledge but not the energy to teach it properly. The idea is simple — if the lecture isn't going to hold my attention, maybe a dungeon will.
 
 **Feed it a programming book. It turns the book into a quest you actually have to play to pass.**
 
@@ -115,7 +117,7 @@ If your shell happens to export `PORT`, the backend prefers `API_PORT` instead. 
 A quick map of the big modules so a new dev can find their way around without reading everything first.
 
 ```
-codebook-arcade/
+questbook/
 ├── backend/                          # Express + TypeScript server
 │   ├── src/
 │   │   ├── server.ts                 # app setup: cors, json body parser, /health, /api mount

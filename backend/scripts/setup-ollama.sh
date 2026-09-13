@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up local Ollama for $0 offline LLM challenge generation in CodeBook Arcade.
+# Sets up local Ollama for $0 offline LLM challenge generation in QuestBook.
 #
 #   bash backend/scripts/setup-ollama.sh              # pull the recommended model
 #   MODEL=llama3.2:3b bash backend/scripts/setup-ollama.sh

@@ -433,6 +433,57 @@ canvas {
 }
 
 /* ------------------------------------------------------------------ */
+/* Touch compatibility (phones/tablets)                                 */
+/* ------------------------------------------------------------------ */
+/* Buttons and inputs must never trigger double-tap zoom or long-press
+   context menus, and tapping one should never also scroll the page. */
+.pixel-btn,
+.pixel-input,
+.pixel-select,
+.option-btn,
+.touch-btn {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/* The on-screen D-pad holds directions — scrolling must not steal the press. */
+.touch-controls {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Comfortable hit targets on coarse pointers (Apple/Google 44px guidance)
+   without changing desktop layout — applies only to touch devices. */
+@media (pointer: coarse) {
+  .pixel-btn,
+  .option-btn,
+  .pixel-select {
+    min-height: 44px;
+  }
+  .pixel-input {
+    min-height: 46px;
+    font-size: 16px; /* ≥16px stops iOS Safari auto-zoom on focus */
+  }
+}
+
+/* Smaller screens: keep the HUD and dialogs reachable without horizontal
+   scrolling, and give the game canvas breathing room above the D-pad. */
+@media (max-width: 640px) {
+  .hud {
+    gap: 0.4rem;
+    font-size: 0.85rem;
+  }
+  .dialog-box {
+    max-width: 100% !important;
+    margin: 0 0.5rem !important;
+  }
+  .gameover-panel {
+    margin: 0 0.75rem;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Game Over — torn parchment / broken-shield defeat panel              */
 /* ------------------------------------------------------------------ */
 .gameover-panel {

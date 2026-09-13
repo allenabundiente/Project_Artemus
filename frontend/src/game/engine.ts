@@ -119,6 +119,8 @@ export class ArcadeEngine {
   private pendingMonster: number | null = null;
 
   private keys: Set<string> = new Set();
+  /** Live touch-control state, OR-merged with keyboard input (mobile/tablet). */
+  private touch: { left: boolean; right: boolean; jump: boolean } = { left: false, right: false, jump: false };
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -195,6 +197,18 @@ export class ArcadeEngine {
 
   setPaused(p: boolean): void {
     this.paused = p;
+    // A dialog opening mid-press must not leave a held touch stuck on.
+    if (p) this.touch = { left: false, right: false, jump: false };
+  }
+
+  /** Called by the on-screen touch controls; merged with keyboard in `input`. */
+  setTouchInput(t: Partial<{ left: boolean; right: boolean; jump: boolean }>): void {
+    this.touch = { ...this.touch, ...t };
+  }
+
+  /** Clear every touch flag (e.g. when the level or a dialog unmounts them). */
+  clearTouchInput(): void {
+    this.touch = { left: false, right: false, jump: false };
   }
 
   addScore(n: number): void {
@@ -307,10 +321,10 @@ export class ArcadeEngine {
 
   private get input(): { left: boolean; right: boolean; jump: boolean } {
     const k = this.keys;
-    const left = k.has('ArrowLeft') || k.has('KeyA');
-    const right = k.has('ArrowRight') || k.has('KeyD');
+    const left = k.has('ArrowLeft') || k.has('KeyA') || this.touch.left;
+    const right = k.has('ArrowRight') || k.has('KeyD') || this.touch.right;
     // Jump is W only — Space is reserved for typing in the answer input.
-    const jump = k.has('KeyW') || k.has('ArrowUp');
+    const jump = k.has('KeyW') || k.has('ArrowUp') || this.touch.jump;
     return { left, right, jump };
   }
 

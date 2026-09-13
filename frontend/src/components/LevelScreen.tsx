@@ -8,6 +8,7 @@ import { dealQuestPlan, type QuestPlan } from '../game/questPlan';
 import { sfx } from '../game/sfx';
 import { loadCustomThemes } from '../game/themes';
 import BattleScreen from './BattleScreen';
+import TouchControls from './TouchControls';
 
 interface Props {
   bookId: string;
@@ -62,6 +63,12 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   const [failOutcome, setFailOutcome] = useState<FailOutcome | null>(null);
   const [failError, setFailError] = useState<string | null>(null);
   const termSettingsRef = useRef<{ timeLimitSeconds: number } | null>(null);
+  // Touch devices (phones/tablets) get the on-screen D-pad; desktops with a
+  // fine pointer keep keyboard-only and never see the pad.
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    setIsTouch(window.matchMedia?.('(pointer: coarse)').matches ?? false);
+  }, []);
 
   // --- init: load challenges + term settings, build layout, spin up engine ----
   useEffect(() => {
@@ -341,6 +348,8 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
       </div>
 
       <canvas id="game-canvas" ref={canvasRef} />
+
+      {isTouch && phase === 'playing' && <TouchControls engine={engineRef.current} />}
 
       {phase === 'battle' && planRef.current && (
         <div className="modal-overlay">

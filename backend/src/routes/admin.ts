@@ -18,9 +18,13 @@ import {
   getGlobalMapConfig, setGlobalMapConfig, getGuildMapSettings, setGuildMapTheme,
 } from '../db/admin.js';
 import {
-  putSprite, getSprite, deleteSprite, listSpriteNames,
+  putSprite, getSprite, deleteSprite, listSpriteNames, listSpriteVersions, getSpriteVersion,
   getJson, putJson, hasJson, importLegacyThemesFromDisk,
 } from '../db/assets.js';
+import {
+  insertAuditEntry, listAuditEntries, listAdmins, grantAdminByEmail, createAdmin, demoteAdmin,
+  type AuditAction,
+} from '../db/audit.js';
 import { withTransaction } from '../db/db.js';
 import {
   ALL_SETS, findSet, setsForSkus,
@@ -44,6 +48,27 @@ const upload = multer({
 /** Validate a sprite slot name to prevent path traversal. */
 function isSafeSlot(name: string): boolean {
   return /^[a-z0-9_]{1,64}$/.test(name);
+}
+
+/**
+ * Best-effort audit write: a failed log insert must never break the admin
+ * action itself (house style — graceful degradation).
+ */
+async function logAudit(req: { user?: { id: string; name: string } | undefined }, action: AuditAction, target: string, detail: object = {}): Promise<void> {
+  try {
+    await insertAuditEntry({ actorId: req.user?.id ?? null, actorName: req.user?.name ?? 'unknown', action, target, detail });
+  } catch (e) {
+    console.error(`[audit] failed to record ${action}:`, (e as Error).message);
+  }
+}
+
+/** name → content version for every custom sprite (drives ?v= cache busting). */
+async function spriteMeta(): Promise<Record<string, number>> {
+  try {
+    return await listSpriteVersions();
+  } catch {
+    return {};
+  }
 }
 
 export function seedShop(): void {
@@ -154,7 +179,74 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     const locked = req.body?.locked === true;
     const row = await setFeatureLock(String(req.params.key), locked);
     if (!row) return res.status(404).json({ error: 'Unknown feature' });
+    await logAudit(req, 'feature_lock', row.key, { locked });
     res.json(row);
+  });
+
+  // --- admin: admin account management ------------------------------------------------
+  //
+  // Create a new admin outright, promote an existing teacher/student by email,
+  // review the current admins, and demote — with a guard rail so the last admin
+  // can never be demoted (no lockouts). Every change lands in the audit log.
+
+  router.get('/admin/admins', requireAdmin, async (_req, res) => {
+    try {
+      res.json({ admins: await listAdmins() });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  router.post('/admin/admins', requireAdmin, async (req, res) => {
+    const name = typeof req.body?.name === 'string' && req.body.name.trim().length > 0 ? req.body.name.trim().slice(0, 60) : null;
+    const email = typeof req.body?.email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(req.body.email.trim()) ? req.body.email.trim() : null;
+    const password = typeof req.body?.password === 'string' && req.body.password.length >= 8 ? req.body.password : null;
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'name, a valid email, and a password of at least 8 characters are required' });
+    }
+    try {
+      const result = await createAdmin(name, email, await hashPassword(password));
+      if (result === 'exists') return res.status(409).json({ error: 'A user with that email already exists' });
+      await logAudit(req, 'admin_created', result.email, { id: result.id, name: result.name });
+      res.status(201).json({ admin: result });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  router.post('/admin/admins/grant', requireAdmin, async (req, res) => {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'A valid email is required' });
+    try {
+      const granted = await grantAdminByEmail(email);
+      if (!granted) return res.status(404).json({ error: 'No user found with that email' });
+      await logAudit(req, 'admin_granted', granted.email, { id: granted.id, name: granted.name });
+      res.json({ admin: granted });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  router.delete('/admin/admins/:id', requireAdmin, async (req, res) => {
+    try {
+      const demoted = await demoteAdmin(String(req.params.id));
+      if (!demoted) return res.status(400).json({ error: 'Cannot demote the last remaining admin' });
+      await logAudit(req, 'admin_revoked', demoted.email, { id: demoted.id, name: demoted.name });
+      res.json({ admin: demoted });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  // --- admin: audit log -----------------------------------------------------------------
+
+  router.get('/admin/audit', requireAdmin, async (req, res) => {
+    try {
+      const limit = Number(req.query.limit);
+      res.json({ entries: await listAuditEntries(Number.isFinite(limit) ? limit : 100) });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
   });
 
   // --- admin: sprite management ----------------------------------------------------
@@ -176,7 +268,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
         // DB offline — listing still works with the disk-only view.
       }
       const files = [...new Set([...Object.keys(manifest), ...diskFiles, ...dbSprites])].sort();
-      res.json({ manifest, files, custom: dbSprites });
+      res.json({ manifest, files, custom: dbSprites, versions: await spriteMeta() });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -196,7 +288,9 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       } catch {
         // Read-only FS — the DB copy above still wins.
       }
-      res.json({ ok: true, slot, bytes: req.file.size });
+      await logAudit(req, 'sprite_upload', slot, { bytes: req.file.size });
+      const version = await getSpriteVersion(slot);
+      res.json({ ok: true, slot, bytes: req.file.size, version: version ?? 1 });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
     }
@@ -218,6 +312,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
         execFile('npx', ['tsx', 'scripts/generate-sprites.ts'], { cwd: path.resolve(SPRITES_DIR, '..') }, (err) => (err ? reject(err) : resolve()));
       });
       await prom;
+      await logAudit(req, 'sprite_restore', slot);
       res.json({ ok: true, slot, note: 'Regenerated from canonical grid' });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -233,11 +328,14 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
 
   // Public list of custom sprite slots (DB-backed uploads). The client uses
   // this to preload custom art that has no static-file equivalent.
+  // The versions map lets the client build ?v=<version> URLs for the static
+  // /sprites/<name>.png copies too, so a re-upload busts every cache at once.
   router.get('/sprites/list', async (_req, res) => {
     try {
-      res.json({ sprites: await listSpriteNames() });
+      const [sprites, versions] = await Promise.all([listSpriteNames(), spriteMeta()]);
+      res.json({ sprites, versions });
     } catch {
-      res.json({ sprites: [] });
+      res.json({ sprites: [], versions: {} });
     }
   });
 
@@ -248,7 +346,17 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       const sprite = await getSprite(name);
       if (!sprite) return res.status(404).json({ error: 'No custom art for this slot' });
       res.setHeader('Content-Type', sprite.mime);
-      res.setHeader('Cache-Control', 'no-cache'); // admin can re-upload; keep it fresh
+      // Content-hashed strong ETag keyed to the write-version: an admin
+      // re-upload changes the version, so caches revalidate instantly while
+      // unchanged art is served as a bodyless 304. Immune to content collisions
+      // (unlike hashing the bytes) and to clock skew (unlike timestamps).
+      const etag = `"sprite-${name}-v${sprite.version}"`;
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).end();
+        return;
+      }
       res.send(sprite.bytes);
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -337,6 +445,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     else anims.push(anim);
     try {
       await writeAnims(anims);
+      await logAudit(req, 'animation_save', anim.name, { frames: anim.frames, fps: anim.fps, loop: anim.loop });
       res.json({ ok: true, animation: anim });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -351,6 +460,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       const next = anims.filter((a) => a.name !== name);
       if (next.length === anims.length) return res.status(404).json({ error: 'Unknown animation' });
       await writeAnims(next);
+      await logAudit(req, 'animation_delete', name);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -395,6 +505,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       else themes.push(sanitized);
       await putJson('themes', themes);
       mirrorThemesToDisk(themes);
+      await logAudit(req, 'theme_save', id, { name: sanitized.name });
       res.json({ ok: true, theme: sanitized });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -415,6 +526,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       if (cfg.fixedTheme === id && cfg.mode === 'fixed') {
         await setGlobalMapConfig({ mode: 'fixed', fixedTheme: 'dungeon' });
       }
+      await logAudit(req, 'theme_delete', id);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
@@ -432,7 +544,9 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     const fixedTheme = typeof req.body?.fixedTheme === 'string' && /^[a-z0-9_-]{1,32}$/.test(req.body.fixedTheme)
       ? req.body.fixedTheme
       : 'dungeon';
-    res.json(await setGlobalMapConfig({ mode, fixedTheme }));
+    const saved = await setGlobalMapConfig({ mode, fixedTheme });
+    await logAudit(req, 'map_config_save', 'global', saved);
+    res.json(saved);
   });
 
   // --- admin: shop management ----------------------------------------------------
@@ -451,11 +565,14 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       sku, name, description: typeof b.description === 'string' ? b.description.slice(0, 200) : '',
       category, kind, price: Math.round(price), sort: Number.isFinite(Number(b.sort)) ? Number(b.sort) : 0,
     });
+    await logAudit(req, 'shop_item_create', item.sku, { name: item.name, price: item.price, category: item.category });
     res.status(201).json(item);
   });
 
   router.delete('/admin/shop/:id', requireAdmin, async (req, res) => {
-    res.json({ ok: await deleteShopItem(String(req.params.id)) });
+    const ok = await deleteShopItem(String(req.params.id));
+    if (ok) await logAudit(req, 'shop_item_delete', String(req.params.id));
+    res.json({ ok });
   });
 
   // --- shop (player-facing) ------------------------------------------------------

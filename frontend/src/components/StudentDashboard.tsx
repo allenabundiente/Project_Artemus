@@ -3,6 +3,7 @@ import * as api from '../api';
 import type { AuthUser, BookDetail, BookMeta, GuildInfo, Progress, Term } from '../types';
 import { spriteDataUrl } from '../game/sprites';
 import { rankForScore } from '../game/ranks';
+import { onHudCoins } from '../game/hudCoins';
 import RankBadge from './RankBadge';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import WorldMap from './WorldMap';
@@ -58,6 +59,12 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   /** Quest count for the NEXT upload ('' = auto). */
   const [uploadQuestCount, setUploadQuestCount] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  // The HUD coin counter shows this (session-pushed) balance when it differs
+  // from the user-prop balance — celebrations bump it without a refetch.
+  const [hudCoins, setHudCoins] = useState<number | null>(null);
+  useEffect(() => onHudCoins((c) => setHudCoins(c)), []);
+  // A fresh authoritative balance (quest payout, refetch) wins again.
+  useEffect(() => { setHudCoins(null); }, [userProp.coins]);
 
   const refreshBooks = useCallback(async () => {
     try {
@@ -194,7 +201,9 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           <RankBadge rank={rank} />
           <span className="coin-count">
             <img src={spriteDataUrl('coin')} alt="" style={{ width: 14, height: 14 }} />
-            <span className="label">{user.coins}</span>
+            <span className="label coin-count-value" data-coins={hudCoins ?? user.coins}>
+              {hudCoins ?? user.coins}
+            </span>
           </span>
           {guild && <span className="label">🏰 {guild.name}</span>}
         </div>

@@ -135,6 +135,25 @@ export interface FeatureRow {
   locked: boolean;
 }
 
+/** One row of the royal audit trail (who did what, when). */
+export interface AuditEntry {
+  id: number;
+  actorId: string | null;
+  actorName: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+  createdAt: string;
+}
+
+/** An admin account, for the panel's admin-management tab. */
+export interface AdminAccount {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: string;
+}
+
 export interface MapConfig {
   mode: 'fixed' | 'random_by_difficulty';
   fixedTheme: string;

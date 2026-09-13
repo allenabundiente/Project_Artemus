@@ -9,6 +9,7 @@
 // clip's name (or the slot starts with it).
 
 import type { SpriteMap } from './sprites';
+import { spriteApiUrl, spriteStaticUrl, refreshSpriteVersions } from './spriteVersions';
 
 export interface SpriteAnimation {
   name: string;
@@ -74,11 +75,8 @@ export async function loadExtraSprites(sprites: SpriteMap, preloaded?: SpriteAni
   // the static manifest covers was already loaded by loadSprites().
   let custom: string[] = [];
   try {
-    const res = await fetch('/api/sprites/list');
-    if (res.ok) {
-      const data = (await res.json()) as { sprites?: string[] };
-      custom = (data.sprites ?? []).filter((n) => typeof n === 'string' && !sprites[n] && !wanted.includes(n));
-    }
+    const list = await refreshSpriteVersions();
+    if (list) custom = list.sprites.filter((n) => typeof n === 'string' && !sprites[n] && !wanted.includes(n));
   } catch {
     // API unreachable — skip custom preloading entirely.
   }
@@ -101,9 +99,9 @@ export async function loadExtraSprites(sprites: SpriteMap, preloaded?: SpriteAni
               resolve();
             };
             alt.onerror = () => resolve(); // frame missing → engine falls back
-            alt.src = `/sprites/${name}.png`;
+            alt.src = spriteStaticUrl(name);
           };
-          img.src = `/api/sprites/${encodeURIComponent(name)}.png`;
+          img.src = spriteApiUrl(name);
         }),
     ),
   );

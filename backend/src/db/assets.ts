@@ -22,23 +22,45 @@ export function assetKey(kind: AdminAssetKind, name?: string): string {
 export interface StoredSprite {
   bytes: Buffer;
   mime: string;
+  /** Content version — bumped on every write; feeds ETags + ?v= cache busting. */
+  version: number;
 }
 
 export async function putSprite(name: string, bytes: Buffer, mime = 'image/png'): Promise<void> {
   await query(
-    `INSERT INTO admin_assets (key, mime, bytes, size) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (key) DO UPDATE SET mime = EXCLUDED.mime, bytes = EXCLUDED.bytes, size = EXCLUDED.size, updated_at = now()`,
+    `INSERT INTO admin_assets (key, mime, bytes, size, version) VALUES ($1, $2, $3, $4, 1)
+     ON CONFLICT (key) DO UPDATE SET mime = EXCLUDED.mime, bytes = EXCLUDED.bytes, size = EXCLUDED.size,
+       version = admin_assets.version + 1, updated_at = now()`,
     [assetKey('sprite', name), mime, bytes, bytes.length],
   );
 }
 
 export async function getSprite(name: string): Promise<StoredSprite | null> {
-  const row = await queryOne<{ mime: string; bytes: Buffer }>(
-    `SELECT mime, bytes FROM admin_assets WHERE key = $1`,
+  const row = await queryOne<{ mime: string; bytes: Buffer; version: number }>(
+    `SELECT mime, bytes, version FROM admin_assets WHERE key = $1`,
     [assetKey('sprite', name)],
   );
   if (!row?.bytes) return null;
-  return { bytes: Buffer.from(row.bytes), mime: row.mime };
+  return { bytes: Buffer.from(row.bytes), mime: row.mime, version: Number(row.version ?? 1) };
+}
+
+/** Content version of one sprite (null = no custom art stored). */
+export async function getSpriteVersion(name: string): Promise<number | null> {
+  const row = await queryOne<{ version: number }>(
+    `SELECT version FROM admin_assets WHERE key = $1`,
+    [assetKey('sprite', name)],
+  );
+  return row ? Number(row.version) : null;
+}
+
+/** name → content version for every custom sprite (drives ?v= cache busting). */
+export async function listSpriteVersions(): Promise<Record<string, number>> {
+  const rows = await query<{ key: string; version: number }>(
+    `SELECT key, version FROM admin_assets WHERE key LIKE 'sprite:%'`,
+  );
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.key.slice('sprite:'.length)] = Number(r.version);
+  return out;
 }
 
 export async function deleteSprite(name: string): Promise<boolean> {
@@ -62,8 +84,9 @@ export async function getJson(kind: 'animations' | 'themes'): Promise<unknown | 
 export async function putJson(kind: 'animations' | 'themes', value: unknown): Promise<void> {
   const text = JSON.stringify(value);
   await query(
-    `INSERT INTO admin_assets (key, mime, json, size) VALUES ($1, 'application/json', $2::jsonb, $3)
-     ON CONFLICT (key) DO UPDATE SET json = EXCLUDED.json, size = EXCLUDED.size, updated_at = now()`,
+    `INSERT INTO admin_assets (key, mime, json, size, version) VALUES ($1, 'application/json', $2::jsonb, $3, 1)
+     ON CONFLICT (key) DO UPDATE SET json = EXCLUDED.json, size = EXCLUDED.size,
+       version = admin_assets.version + 1, updated_at = now()`,
     [assetKey(kind), text, Buffer.byteLength(text)],
   );
 }

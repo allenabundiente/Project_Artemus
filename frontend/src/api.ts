@@ -1,6 +1,6 @@
 import type {
-  AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, FeatureRow, GenerateResult,
-  GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
+  AdminAccount, AuditEntry, AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, FeatureRow,
+  GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
   Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
 } from './types';
@@ -288,8 +288,32 @@ export async function setFeatureLock(key: string, locked: boolean): Promise<Feat
   return send(`/api/admin/features/${key}`, 'PUT', { locked });
 }
 
-export async function getAdminSprites(): Promise<{ manifest: Record<string, { width: number; height: number }>; files: string[]; custom?: string[] }> {
+export async function getAdminSprites(): Promise<{ manifest: Record<string, { width: number; height: number }>; files: string[]; custom?: string[]; versions?: Record<string, number> }> {
   return get('/api/admin/sprites');
+}
+
+// --- admin: admin account management -------------------------------------------------
+
+export async function getAdminAccounts(): Promise<{ admins: AdminAccount[] }> {
+  return get('/api/admin/admins');
+}
+
+export async function createAdminAccount(name: string, email: string, password: string): Promise<{ admin: AdminAccount }> {
+  return send('/api/admin/admins', 'POST', { name, email, password });
+}
+
+export async function grantAdminAccount(email: string): Promise<{ admin: AdminAccount }> {
+  return send('/api/admin/admins/grant', 'POST', { email });
+}
+
+export async function demoteAdminAccount(id: string): Promise<{ admin: AdminAccount }> {
+  return send(`/api/admin/admins/${id}`, 'DELETE');
+}
+
+// --- admin: audit log ------------------------------------------------------------------
+
+export async function getAuditLog(limit = 100): Promise<{ entries: AuditEntry[] }> {
+  return get(`/api/admin/audit?limit=${limit}`);
 }
 
 export async function uploadSprite(slot: string, png: File): Promise<{ ok: boolean; slot: string }> {

@@ -743,3 +743,124 @@ canvas {
   gap: 0.75rem;
   flex-wrap: wrap;
 }
+
+/* ------------------------------------------------------------------ */
+/* Treasure-drop purchase celebration (Shop + Wardrobe unlocks)         */
+/* Game-language overlay: chest sprite, coin fountain, parchment banner. */
+/* ------------------------------------------------------------------ */
+.celebrate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 6, 4, 0.72);
+  cursor: pointer;
+  animation: celebrate-fade 180ms ease-out both;
+  overflow: hidden;
+}
+
+@keyframes celebrate-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.celebrate-out {
+  animation: celebrate-fade-out 240ms ease-in forwards;
+}
+
+@keyframes celebrate-fade-out {
+  to { opacity: 0; }
+}
+
+.celebrate-panel {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  padding: 1.5rem 2.5rem 1.25rem;
+  animation: celebrate-chest-in 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes celebrate-chest-in {
+  from { transform: translateY(-140%) scale(0.6); opacity: 0; }
+  60% { opacity: 1; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.celebrate-chest {
+  width: 128px;
+  height: 128px;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.6));
+  animation: celebrate-chest-glow 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes celebrate-chest-glow {
+  from { filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.6)) brightness(1); }
+  to { filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.6)) brightness(1.18); }
+}
+
+.celebrate-banner {
+  margin-top: 0.9rem;
+  padding: 0.55rem 1.2rem 0.5rem;
+  text-align: center;
+  color: var(--d-black);
+  background:
+    repeating-linear-gradient(105deg, transparent 0 22px, rgba(0, 0, 0, 0.04) 22px 24px),
+    var(--d-parchment);
+  border: 3px solid var(--d-darkwood);
+  outline: 2px solid var(--d-gold);
+  outline-offset: -6px;
+  box-shadow: 5px 5px 0 var(--d-black);
+  animation: modal-pop-in 200ms 160ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.celebrate-heading {
+  font-family: var(--font-arcade);
+  font-size: 0.95rem;
+  letter-spacing: 2px;
+  color: var(--d-red);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.18);
+  margin: 0.15rem 0 0.3rem;
+}
+
+.celebrate-sub {
+  font-family: var(--font-term);
+  font-size: 1.15rem;
+  color: var(--d-brick);
+  margin: 0;
+}
+
+.celebrate-coin {
+  position: absolute;
+  top: 44px; /* launches from the chest mouth */
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  image-rendering: pixelated;
+  pointer-events: none;
+  will-change: transform;
+  z-index: 2;
+}
+
+/* Coin counter pulse when a purchase/quest updates the balance. */
+.coin-bump {
+  animation: coin-bump 650ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes coin-bump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.35); color: var(--d-gold-bright); }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .celebrate-overlay,
+  .celebrate-panel,
+  .celebrate-chest,
+  .celebrate-banner,
+  .coin-bump {
+    animation: none !important;
+  }
+}

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api';
-import type { FeatureRow, GuildAdminInfo, MapConfig, RosterEntry, ShopItem, ThemeMeta } from '../types';
+import type { AdminAccount, AuditEntry, FeatureRow, GuildAdminInfo, MapConfig, RosterEntry, ShopItem, ThemeMeta } from '../types';
 import { spriteDataUrl } from '../game/sprites';
+import { spriteApiUrl, refreshSpriteVersions, onSpriteVersions } from '../game/spriteVersions';
 import type { AnimDef, CustomThemePayload } from '../api';
 import GuildSettings from './GuildSettings';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 
-type Tab = 'features' | 'guilds' | 'sprites' | 'animations' | 'themes' | 'map' | 'shop';
+type Tab = 'features' | 'guilds' | 'admins' | 'audit' | 'sprites' | 'animations' | 'themes' | 'map' | 'shop';
 
 const FEATURES_HELP: Record<string, string> = {
   shop: 'The Royal Shop (players spend coins)',
@@ -79,6 +80,8 @@ function SpritesTab() {
     api.getAdminSprites()
       .then((s) => { setFiles(s.files); setCustom(s.custom ?? []); })
       .catch(() => { setFiles([]); setCustom([]); });
+    void refreshSpriteVersions(); // warm the ?v= map so previews can bust cache
+    return onSpriteVersions(() => force((n) => n + 1));
   }, []);
 
   async function restore(slot: string) {
@@ -86,6 +89,7 @@ function SpritesTab() {
     setBusy(slot);
     try {
       await api.restoreSprite(slot);
+      await refreshSpriteVersions(); // drop the slot's ?v= → preview falls back to grid art
       setNotice(`${slot} restored from the canonical grid.`);
       force((n) => n + 1);
     } catch (e) {
@@ -112,7 +116,8 @@ function SpritesTab() {
             setBusy(slot);
             try {
               await api.uploadSprite(slot, file);
-              setNotice(`${slot} updated — refresh a quest to see it.`);
+              await refreshSpriteVersions(); // new ?v= for this slot → cache busted everywhere
+              setNotice(`${slot} updated — players get it on their next sprite load.`);
               setCustom((c) => (c.includes(slot) ? c : [...c, slot]));
               force((n) => n + 1);
             } catch (e) {
@@ -131,7 +136,7 @@ function SpriteCell({ slot, busy, custom, onRestore, onUpload }: { slot: string;
   return (
     <div style={{ textAlign: 'center', border: '1px solid rgba(255,255,255,0.15)', padding: '0.4rem' }}>
       <img
-        src={custom ? `/api/sprites/${encodeURIComponent(slot)}.png` : spriteDataUrl(slot)}
+        src={custom ? spriteApiUrl(slot) : spriteDataUrl(slot)}
         alt={slot}
         title={custom ? 'Custom art (stored server-side)' : 'Built-in grid art'}
         style={{ width: 48, height: 48, imageRendering: 'pixelated', objectFit: 'contain' }}
@@ -739,6 +744,182 @@ function GuildsTab() {
   );
 }
 
+// --- admin account management ------------------------------------------------------------
+
+const ADMIN_ACTIONS_HELP = 'Admins hold every teacher power, manage all guilds, and alone reach this panel.';
+
+function AdminsTab() {
+  const [admins, setAdmins] = useState<AdminAccount[]>([]);
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [grantEmail, setGrantEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    api.getAdminAccounts().then((r) => setAdmins(r.admins)).catch((e) => setError((e as Error).message));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canCreate = form.name.trim() && form.email.trim() && form.password.length >= 8;
+
+  return (
+    <div className="pixel-panel">
+      <p className="pixel-font" style={{ fontSize: '0.75rem', margin: '0 0 0.25rem' }}>👑 ROYAL CROWN</p>
+      <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0 0 0.75rem' }}>
+        {ADMIN_ACTIONS_HELP} Every grant, creation, and demotion lands in the audit log.
+      </p>
+      {error && <p className="error-text">{error}</p>}
+      {notice && <p className="status-text">{notice}</p>}
+
+      <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 1rem' }}>
+        {admins.map((a) => (
+          <li key={a.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <span className="term-font" style={{ fontSize: '0.95rem' }}>
+              <strong>{a.name}</strong> <span style={{ color: 'var(--d-stone-light)' }}>· {a.email}</span>
+            </span>
+            <button
+              className="pixel-btn pixel-btn--ghost"
+              style={{ fontSize: '0.55rem', whiteSpace: 'nowrap' }}
+              disabled={busy || admins.length <= 1}
+              title={admins.length <= 1 ? 'The last admin cannot be demoted' : 'Demote to student'}
+              onClick={() => {
+                if (window.confirm(`Demote ${a.name} to a student? They lose admin powers immediately.`)) {
+                  void run(async () => {
+                    await api.demoteAdminAccount(a.id);
+                    setNotice(`${a.name} is no longer an admin.`);
+                    refresh();
+                  });
+                }
+              }}
+            >
+              ✕ DEMOTE
+            </button>
+          </li>
+        ))}
+        {admins.length === 0 && <p className="status-text" style={{ margin: 0 }}>Loading admins…</p>}
+      </ul>
+
+      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: '0 0 0.4rem' }}>➕ CREATE NEW ADMIN</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.9rem' }}>
+        <input className="pixel-input" placeholder="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={{ width: 140 }} />
+        <input className="pixel-input" type="email" placeholder="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={{ width: 200 }} />
+        <input className="pixel-input" type="password" placeholder="password (8+ chars)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} style={{ width: 170 }} />
+        <button
+          className="pixel-btn pixel-btn--gold"
+          style={{ fontSize: '0.6rem' }}
+          disabled={busy || !canCreate}
+          onClick={() => void run(async () => {
+            const r = await api.createAdminAccount(form.name.trim(), form.email.trim(), form.password);
+            setNotice(`Admin account created for ${r.admin.email}.`);
+            setForm({ name: '', email: '', password: '' });
+            refresh();
+          })}
+        >
+          {busy ? '…' : 'CREATE'}
+        </button>
+      </div>
+
+      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: '0 0 0.4rem' }}>⬆ PROMOTE EXISTING USER</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
+        <input
+          className="pixel-input"
+          type="email"
+          placeholder="email of a teacher or student"
+          value={grantEmail}
+          onChange={(e) => setGrantEmail(e.target.value)}
+          style={{ flex: 1, minWidth: 220 }}
+        />
+        <button
+          className="pixel-btn pixel-btn--gold"
+          style={{ fontSize: '0.6rem' }}
+          disabled={busy || !grantEmail.trim()}
+          onClick={() => void run(async () => {
+            const r = await api.grantAdminAccount(grantEmail.trim());
+            setNotice(`${r.admin.name} (${r.admin.email}) is now an admin.`);
+            setGrantEmail('');
+            refresh();
+          })}
+        >
+          {busy ? '…' : 'GRANT CROWN'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- audit log ------------------------------------------------------------------------------
+
+const ACTION_LABEL: Record<string, string> = {
+  sprite_upload: 'uploaded sprite',
+  sprite_restore: 'restored sprite',
+  animation_save: 'saved animation',
+  animation_delete: 'deleted animation',
+  theme_save: 'saved theme',
+  theme_delete: 'deleted theme',
+  map_config_save: 'updated global map config',
+  shop_item_create: 'created shop item',
+  shop_item_delete: 'deleted shop item',
+  feature_lock: 'set feature lock',
+  admin_created: 'created admin account',
+  admin_granted: 'promoted to admin',
+  admin_revoked: 'demoted admin',
+};
+
+function AuditTab() {
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    api.getAuditLog(150).then((r) => setEntries(r.entries)).catch((e) => setError((e as Error).message));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  return (
+    <div className="pixel-panel">
+      <p className="pixel-font" style={{ fontSize: '0.75rem', margin: '0 0 0.25rem' }}>📜 ROYAL AUDIT LOG</p>
+      <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0 0 0.75rem' }}>
+        Who uploaded which sprite, edited which theme, created which shop item — every admin action,
+        newest first.
+      </p>
+      {error && <p className="error-text">{error}</p>}
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        {entries.map((e) => {
+          const extra = Object.keys(e.detail ?? {});
+          const detail = extra.length > 0
+            ? ` (${extra.map((k) => `${k}: ${String(e.detail[k]).slice(0, 40)}`).join(', ')})`
+            : '';
+          return (
+            <li key={e.id} style={{ padding: '0.35rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <span className="term-font" style={{ fontSize: '0.95rem' }}>
+                <strong>{e.actorName}</strong> {ACTION_LABEL[e.action] ?? e.action}
+                {e.target && <strong> “{e.target}”</strong>}
+                <span style={{ color: 'var(--d-stone-light)' }}>{detail} · {new Date(e.createdAt).toLocaleString()}</span>
+              </span>
+            </li>
+          );
+        })}
+        {entries.length === 0 && !error && (
+          <p className="status-text" style={{ margin: 0 }}>Nothing recorded yet — the chronicle begins with the next change.</p>
+        )}
+      </ul>
+    </div>
+  );
+}
+
 // --- the panel ---------------------------------------------------------------------------
 
 export default function AdminPanel({ onExit }: { onExit?: () => void }) {
@@ -750,7 +931,7 @@ export default function AdminPanel({ onExit }: { onExit?: () => void }) {
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <div className="pixel-panel" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <p className="pixel-font" style={{ fontSize: '0.85rem', margin: '0.25rem 0.5rem 0 0', color: 'var(--d-gold)' }}>👑 ADMIN</p>
-        {(['features', 'guilds', 'sprites', 'animations', 'themes', 'map', 'shop'] as Tab[]).map((t) => (
+        {(['features', 'guilds', 'admins', 'audit', 'sprites', 'animations', 'themes', 'map', 'shop'] as Tab[]).map((t) => (
           <button
             key={t}
             className={`pixel-btn ${tab === t ? 'pixel-btn--gold' : 'pixel-btn--ghost'}`}
@@ -768,6 +949,8 @@ export default function AdminPanel({ onExit }: { onExit?: () => void }) {
       </div>
       {tab === 'features' && <FeaturesTab />}
       {tab === 'guilds' && <GuildsTab />}
+      {tab === 'admins' && <AdminsTab />}
+      {tab === 'audit' && <AuditTab />}
       {tab === 'sprites' && <SpritesTab />}
       {tab === 'animations' && <AnimationsTab />}
       {tab === 'themes' && <ThemesTab themes={themes} />}

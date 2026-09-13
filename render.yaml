@@ -50,11 +50,18 @@ services:
       # is unset).
 
       # --- Optional LLM challenge generation --------------------------
-      # Add any of these later via Dashboard → questbook → Environment.
       # Unset/empty = offline heuristic generation (no API calls).
       #
+      # EASIEST FREE SETUP — OpenRouter (one key, many :free models):
+      #   1. Create a key at https://openrouter.ai/settings/keys
+      #   2. Dashboard → questbook → Environment → add:
+      #        OPENAI_BASE_URL = https://openrouter.ai/api/v1
+      #        OPENAI_API_KEY  = sk-or-v1-…
+      #        LLM_MODEL       = deepseek/deepseek-chat-v3:free
+      #   (any model tagged :free works; saving env vars redeploys)
+      #
       #   ANTHROPIC_API_KEY   (paid, best quality — Claude)
-      #   OPENAI_BASE_URL     (free OpenAI-compatible providers:
-      #                        OpenRouter / Gemini / Groq / Ollama)
+      #   OPENAI_BASE_URL     (also: Gemini / Groq / Ollama — see
+      #                        backend/.env.example for per-host values)
       #   OPENAI_API_KEY
       #   LLM_MODEL

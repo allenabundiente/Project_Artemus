@@ -1,7 +1,7 @@
 import { Router, json } from 'express';
 import multer from 'multer';
 import { parsePdf } from '../services/pdfParser.js';
-import { generateWithLlm, generateHeuristically, perChapterTarget, clampTargetCount, type ChapterContent, type GeneratedChallenge, type GenerationOptions } from '../services/contentGenerator.js';
+import { generateWithLlm, generateHeuristically, perChapterTarget, clampTargetCount, detectQuizMode, type ChapterContent, type GeneratedChallenge, type GenerationOptions, type QuizMode } from '../services/contentGenerator.js';
 import { isLlmConfigured, activeProvider, llmModeLabel } from '../services/llmClient.js';
 import { computeScore, DEFAULT_SCORE_WEIGHTS, type ScoreWeights } from '../services/scoring.js';
 import { resolveTermSettings, sanitizeTermSettings, TERMS, type TermSettings } from '../services/termSettings.js';
@@ -11,7 +11,7 @@ import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
 import { registerAdminRoutes, listCustomThemes } from './admin.js';
 import {
   initDbResilient, query, queryOne, withTransaction, applyCoinsTx, insertScoreTx, upsertProgressTx,
-  insertBook, insertChapter, insertChallenge, getBook, listBooks, updateBookQuestCount,
+  insertBook, insertChapter, insertChallenge, getBook, listBooks, updateBookQuestCount, updateBookQuizMode,
   getChapters, getChapter, getChallengesForChapter, getChapterWithText,
   countChallenges, deleteChallengesForBook, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
@@ -42,7 +42,8 @@ export async function generateChallengesForBook(
   guildSettings: Record<string, unknown> | null
 ): Promise<{ challengeCount: number; llmFailures: number; mode: 'llm' | 'heuristic' }> {
   const ts = resolveTermSettings(term, guildSettings);
-  // The teacher's per-book quest count (null = auto) steers batch size.
+  // The teacher's per-book quest count (null = auto) and quiz mode steer
+  // generation.
   const book = await getBook(bookId);
   const target = book?.questCount ?? null;
   const genOpts: GenerationOptions = {
@@ -50,6 +51,7 @@ export async function generateChallengesForBook(
     monsterDifficulty: ts.monsterDifficulty,
     difficultyMix: ts.difficultyMix,
     targetCount: target,
+    quizMode: book?.quizMode ?? 'general',
   };
   const chapters = await getChapters(bookId);
   const useLlm = isLlmConfigured();
@@ -449,12 +451,15 @@ export function createApiRouter(): Router {
         guildId = guild?.id ?? null;
       }
       const questCount = clampTargetCount(req.body?.questCount);
-      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount);
+      // Filename detection (${topic}_code.pdf → programming) with explicit
+      // teacher override taking precedence.
+      const quizMode = detectQuizMode(req.file.originalname, req.body?.quizMode);
+      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount, quizMode);
       for (let i = 0; i < parsed.chapters.length; i++) {
         const ch = parsed.chapters[i];
         await insertChapter(bookId, i, ch.title, ch.text, ch.codeBlocks);
       }
-      res.json({ bookId, title: parsed.title, chapters: parsed.chapters.map((c, i) => ({ idx: i, title: c.title })) });
+      res.json({ bookId, title: parsed.title, quizMode, chapters: parsed.chapters.map((c, i) => ({ idx: i, title: c.title })) });
     } catch (e: any) {
       console.error('[upload]', e);
       res.status(400).json({ error: e?.message || 'Failed to parse PDF' });
@@ -592,9 +597,10 @@ export function createApiRouter(): Router {
   });
 
   /**
-   * Per-book quest settings. Today: questCount (challenges this PDF yields).
-   * null clears the override back to "auto". Editing here does NOT regenerate;
-   * the new count applies on the next (re)generation.
+   * Per-book quest settings. Today: questCount (challenges this PDF yields;
+   * null clears the override back to "auto") and quizMode ('general' or
+   * 'programming' — the teacher override for filename detection). Editing
+   * here does NOT regenerate; changes apply on the next (re)generation.
    */
   router.put('/books/:id/settings', requireAuth, async (req, res) => {
     const bookId = String(req.params.id);
@@ -605,12 +611,20 @@ export function createApiRouter(): Router {
     const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
 
-    if (req.body?.questCount !== undefined) {
-      const updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount));
-      if (!updated) return res.status(500).json({ error: 'Could not save quest count' });
-      return res.json({ bookId, questCount: updated.questCount });
+    if (req.body?.questCount !== undefined || req.body?.quizMode !== undefined) {
+      let updated = book;
+      if (req.body?.questCount !== undefined) {
+        updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount)) ?? book;
+      }
+      if (req.body?.quizMode !== undefined) {
+        const mode = req.body.quizMode === 'programming' ? 'programming' : req.body.quizMode === 'general' ? 'general' : null;
+        if (!mode) return res.status(400).json({ error: 'quizMode must be "general" or "programming"' });
+        updated = await updateBookQuizMode(bookId, mode) ?? book;
+      }
+      if (!updated) return res.status(500).json({ error: 'Could not save quest settings' });
+      return res.json({ bookId, questCount: updated.questCount, quizMode: updated.quizMode });
     }
-    res.json({ bookId, questCount: book.questCount });
+    res.json({ bookId, questCount: book.questCount, quizMode: book.quizMode });
   });
 
   // --- teacher: review / regenerate individual challenges ------------------------

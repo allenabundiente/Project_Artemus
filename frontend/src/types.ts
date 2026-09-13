@@ -21,6 +21,8 @@ export interface BookMeta {
   guildId: string | null;
   /** Teacher-chosen challenge count for this PDF (null = auto). */
   questCount: number | null;
+  /** 'general' (any subject) or 'programming' (code-flavored questions). */
+  quizMode: QuizMode;
   createdAt: string;
 }
 
@@ -54,9 +56,12 @@ export interface Progress {
   bestStreak: number;
 }
 
+export type QuizMode = 'general' | 'programming';
+
 export interface UploadResult {
   bookId: string;
   title: string;
+  quizMode: QuizMode;
   chapters: { idx: number; title: string }[];
 }
 

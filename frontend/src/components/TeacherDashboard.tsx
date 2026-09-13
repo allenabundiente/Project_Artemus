@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
-import type { AuthUser, BookChallengeReview, BookMeta, RosterEntry, Term, TermSettings } from '../types';
+import type { AuthUser, BookChallengeReview, BookMeta, QuizMode, RosterEntry, Term, TermSettings } from '../types';
 import GuildSettings from './GuildSettings';
 import Leaderboard from './Leaderboard';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
@@ -31,6 +31,8 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
   const [term, setTerm] = useState<Term>('prelims');
   /** Quest count chosen for the NEXT upload ('' = auto). */
   const [uploadQuestCount, setUploadQuestCount] = useState('');
+  /** Quiz mode for the NEXT upload ('auto' = detect from filename). */
+  const [uploadQuizMode, setUploadQuizMode] = useState<'auto' | QuizMode>('auto');
   /** Per-tome quest count edits (bookId → select value, '' = auto). */
   const [bookCounts, setBookCounts] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
@@ -107,10 +109,11 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     setBusy('Deciphering the ancient tome…');
     try {
       const questCount = uploadQuestCount ? Number(uploadQuestCount) : null;
-      const up = await api.uploadPdf(file, questCount);
+      const up = await api.uploadPdf(file, questCount, uploadQuizMode);
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
-      setNotice(`"${up.title}" is ready for your adventurers — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
+      const modeNote = up.quizMode === 'programming' ? ' programming mode' : '';
+      setNotice(`"${up.title}" is ready for your adventurers — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode,${modeNote} auto-detected from the filename unless overridden).`);
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -130,6 +133,24 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       await api.regenerateBook(book.id);
       const gen = await api.generateChallenges(book.id, term);
       setNotice(`"${book.title}" now holds ${gen.challengeCount} monsters.`);
+      await refreshGuildData();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Toggle a tome's quiz mode and regenerate so the new angle takes hold. */
+  async function handleBookMode(book: BookMeta) {
+    const next: QuizMode = book.quizMode === 'programming' ? 'general' : 'programming';
+    setError(null);
+    setBusy(`Re-summoning "${book.title}"…`);
+    try {
+      await api.setBookQuestCount(book.id, book.questCount, next);
+      await api.regenerateBook(book.id);
+      const gen = await api.generateChallenges(book.id, term);
+      setNotice(`"${book.title}" re-summoned in ${next} mode — ${gen.challengeCount} monsters.`);
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -223,6 +244,17 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
+                <select
+                  className="pixel-select"
+                  value={uploadQuizMode}
+                  onChange={(e) => setUploadQuizMode(e.target.value as 'auto' | QuizMode)}
+                  style={{ marginRight: '0.4rem' }}
+                  title="AUTO detects programming books from the filename (topicname_code.pdf)"
+                >
+                  <option value="auto">MODE: AUTO</option>
+                  <option value="general">GENERAL</option>
+                  <option value="programming">PROGRAMMING</option>
+                </select>
                 <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>
                   {busy ?? 'UPLOAD QUEST (PDF)'}
                 </button>
@@ -263,7 +295,12 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                     const current = bookCounts[b.id] ?? (b.questCount != null ? String(b.questCount) : '');
                     return (
                       <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ flex: 1, minWidth: '8rem' }}>▸ {b.title}</span>
+                        <span style={{ flex: 1, minWidth: '8rem' }}>
+                          ▸ {b.title}
+                          {b.quizMode === 'programming' && (
+                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)', marginLeft: '0.4rem' }} title="Programming mode — code-reading challenges">⌨ CODE</span>
+                          )}
+                        </span>
                         <select
                           className="pixel-select"
                           style={{ fontSize: '0.6rem' }}
@@ -284,6 +321,15 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                           onClick={() => void handleBookCount(b)}
                         >
                           ⟳ RE-SUMMON
+                        </button>
+                        <button
+                          className="pixel-btn pixel-btn--ghost"
+                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                          title={`Quiz mode: ${b.quizMode}. Click to toggle general ↔ programming.`}
+                          onClick={() => void handleBookMode(b)}
+                          disabled={!!busy}
+                        >
+                          {b.quizMode === 'programming' ? '⌨→📖' : '📖→⌨'}
                         </button>
                         <button
                           className="pixel-btn pixel-btn--ghost"

@@ -1,7 +1,7 @@
 import type {
   AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, FeatureRow, GenerateResult,
   GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
-  Progress, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
+  Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
 } from './types';
 
@@ -145,10 +145,11 @@ export async function getTermSettings(term: string): Promise<{ term: string; set
 
 // --- books -------------------------------------------------------------------------
 
-export async function uploadPdf(file: File, questCount?: number | null): Promise<UploadResult> {
+export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto'): Promise<UploadResult> {
   const form = new FormData();
   form.append('pdf', file);
   if (questCount != null) form.append('questCount', String(questCount));
+  if (quizMode && quizMode !== 'auto') form.append('quizMode', quizMode);
   const res = await fetch('/api/upload', { method: 'POST', body: form, headers: authHeaders() });
   return json<UploadResult>(res);
 }
@@ -158,8 +159,8 @@ export async function generateChallenges(bookId: string, term: string = 'prelims
 }
 
 /** Read or set a book's per-PDF quest settings (quest count; null = auto). */
-export async function setBookQuestCount(bookId: string, questCount: number | null): Promise<{ bookId: string; questCount: number | null }> {
-  return send(`/api/books/${bookId}/settings`, 'PUT', { questCount });
+export async function setBookQuestCount(bookId: string, questCount: number | null, quizMode?: QuizMode): Promise<{ bookId: string; questCount: number | null; quizMode: QuizMode }> {
+  return send(`/api/books/${bookId}/settings`, 'PUT', { questCount, ...(quizMode ? { quizMode } : {}) });
 }
 
 /** Wipe a book's challenges so the next generate() rebuilds them. */

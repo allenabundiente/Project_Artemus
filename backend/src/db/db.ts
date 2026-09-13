@@ -82,6 +82,8 @@ export async function queryOne<T extends pg.QueryResultRow>(sql: string, params:
 
 // --- row mappers (snake_case DB → camelCase TS) -----------------------------
 
+export type QuizMode = 'general' | 'programming';
+
 export interface BookRow {
   id: string;
   title: string;
@@ -90,11 +92,13 @@ export interface BookRow {
   guildId: string | null;
   /** Teacher-chosen challenges per chapter for THIS book (null = auto). */
   questCount: number | null;
+  /** 'general' (any subject) or 'programming' (code-flavored questions). */
+  quizMode: QuizMode;
   createdAt: Date;
 }
 
 function mapBook(r: any): BookRow {
-  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, questCount: r.quest_count ?? null, createdAt: r.created_at };
+  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, questCount: r.quest_count ?? null, quizMode: r.quiz_mode === 'programming' ? 'programming' : 'general', createdAt: r.created_at };
 }
 
 export interface UserRow {
@@ -165,12 +169,18 @@ function mapScore(r: any): ScoreRow {
 
 // --- books / chapters / challenges -------------------------------------------
 
-export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null, questCount: number | null = null): Promise<string> {
+export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null, questCount: number | null = null, quizMode: QuizMode = 'general'): Promise<string> {
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO books (title, filename, owner_id, guild_id, quest_count) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [title, filename, ownerId, guildId, questCount]
+    `INSERT INTO books (title, filename, owner_id, guild_id, quest_count, quiz_mode) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [title, filename, ownerId, guildId, questCount, quizMode]
   );
   return row!.id;
+}
+
+/** Set (or clear) the per-book quiz mode ('general' | 'programming'). */
+export async function updateBookQuizMode(bookId: string, quizMode: QuizMode): Promise<BookRow | null> {
+  const row = await queryOne(`UPDATE books SET quiz_mode = $2 WHERE id = $1 RETURNING *`, [bookId, quizMode]);
+  return row ? mapBook(row) : null;
 }
 
 /** Set (or clear) the per-book challenge count a teacher asked for. */

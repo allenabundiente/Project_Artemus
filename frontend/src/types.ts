@@ -1,4 +1,4 @@
-export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank';
+export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
 
 export interface Challenge {
   id: string;
@@ -33,6 +33,19 @@ export interface ChapterMeta {
 
 export interface BookDetail extends BookMeta {
   chapters: ChapterMeta[];
+}
+
+/** One chapter's challenges in the teacher review feed. */
+export interface ChapterChallengeReview {
+  chapterId: string;
+  idx: number;
+  title: string;
+  challenges: Challenge[];
+}
+
+export interface BookChallengeReview {
+  bookId: string;
+  chapters: ChapterChallengeReview[];
 }
 
 export interface Progress {

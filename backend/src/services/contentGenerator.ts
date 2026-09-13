@@ -1,7 +1,7 @@
 import { callLlm, LlmError } from './llmClient.js';
 import type { ChapterRow, CodeBlock } from '../db/types.js';
 
-export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank';
+export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
 
 export interface GeneratedChallenge {
   type: ChallengeType;
@@ -55,7 +55,7 @@ function countDirective(target: number | undefined): string {
   return '- Generate between 10 and 15 challenges per chapter, ordered easy to hard.';
 }
 
-const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank']);
+const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank', 'true_false', 'short_answer']);
 const VALID_DIFFICULTY = new Set(['easy', 'medium', 'hard']);
 
 const SYSTEM_PROMPT = `You are the content engine for "QuestBook", a retro arcade game that teaches real material from uploaded books and documents.
@@ -69,10 +69,10 @@ Rules:
   "concept": "string — the single core concept this chapter teaches",
   "challenges": [
     {
-      "type": "multiple_choice | predict_output | spot_the_bug | fill_in_blank",
+      "type": "multiple_choice | predict_output | spot_the_bug | fill_in_blank | true_false | short_answer",
       "prompt": "string — the question, written like a game prompt",
       "code": "string or null — required for predict_output and spot_the_bug; optional for others",
-      "options": ["4 strings — REQUIRED for multiple_choice and predict_output, null otherwise; exactly one must be correct"],
+      "options": ["4 strings — REQUIRED for multiple_choice, predict_output and true_false, null otherwise; exactly one must be correct. For true_false exactly two: \"True\" and \"False\"."],
       "correctAnswer": "string — must match one of options exactly when options are present",
       "explanation": "string — 1-2 sentences that teach, tied to the book's own wording",
       "difficulty": "easy | medium | hard"
@@ -80,6 +80,8 @@ Rules:
   ]
 }
 - {{CHALLENGE_COUNT}}
+- Mix at least three DIFFERENT types per batch. Use true_false for subtly-wrong statements (flip one detail: a number, an operator, a cause/effect), short_answer for "in your own words" recall of definitions, and fill_in_blank for exact term recall.
+- Distractors must be PLAUSIBLE and drawn from adjacent concepts in this same text (near-miss values, similar-sounding terms, common misconceptions) — never random noise and never "all of the above".
 - Vary the angle on each challenge: every prompt must be recognizably DIFFERENT from the others (different snippet, different blank, different distractor set) — never paraphrase the same question twice.
 - Mix types. Use the book's real code snippets — do not rewrite them except to introduce one deliberate bug for spot_the_bug.
 - Keep code snippets short (under 15 lines).`;
@@ -157,11 +159,16 @@ function validateGenerated(raw: any): ChapterContent {
     let options: string[] | null = null;
     let correctAnswer = typeof c.correctAnswer === 'string' ? c.correctAnswer.trim() : '';
 
-    if (type === 'multiple_choice' || type === 'predict_output') {
+    if (type === 'multiple_choice' || type === 'predict_output' || type === 'true_false') {
       if (!Array.isArray(c.options) || c.options.length < 2) continue;
       options = (c.options as unknown[]).filter((o): o is string => typeof o === 'string' && o.trim().length > 0).map((o) => o.trim());
       if (options.length < 2) continue;
-      if (!options.includes(correctAnswer)) {
+      if (type === 'true_false') {
+        // Normalize to the canonical True/False pair.
+        options = ['True', 'False'];
+        correctAnswer = /^t(rue)?$/i.test(correctAnswer) ? 'True' : /^f(alse)?$/i.test(correctAnswer) ? 'False' : '';
+        if (!correctAnswer) continue;
+      } else if (!options.includes(correctAnswer)) {
         // Try to find the correct answer among options if the model echoed it differently
         const match = options.find((o) => o.toLowerCase() === correctAnswer.toLowerCase());
         if (match) correctAnswer = match;
@@ -279,6 +286,54 @@ export function generateHeuristically(chapter: ChapterRow, targetCount?: number 
     }
   }
 
+  // 1b) true_false — assert the book's sentence, or swap in a WRONG term from
+  // the same chapter so the statement is subtly (not absurdly) false.
+  const swapPool = defs.map((d) => stripArticle(d.term)).filter(Boolean);
+  for (let i = 0; i < defs.length && challenges.filter((c) => c.type === 'true_false').length < 4; i++) {
+    const d = defs[i];
+    const term = stripArticle(d.term);
+    if (!term) continue;
+    const makeFalse = i % 2 === 1 && swapPool.length >= 2;
+    if (makeFalse) {
+      const wrong = swapPool.find((t) => t !== term);
+      if (!wrong) continue;
+      challenges.push({
+        type: 'true_false',
+        prompt: `True or false, per the book: "${d.text.replace(d.term, wrong)}"`,
+        code: null,
+        options: ['True', 'False'],
+        correctAnswer: 'False',
+        explanation: `False — the book says: "${d.text}". "${wrong}" was swapped in where "${term}" belongs.`,
+        difficulty: 'easy',
+      });
+    } else {
+      challenges.push({
+        type: 'true_false',
+        prompt: `True or false, per the book: "${d.text}"`,
+        code: null,
+        options: ['True', 'False'],
+        correctAnswer: 'True',
+        explanation: `True — this is stated directly in the book.`,
+        difficulty: 'easy',
+      });
+    }
+  }
+
+  // 1c) short_answer — name-the-term recall with lenient manual-style checking.
+  for (const d of defs.slice(0, 3)) {
+    const term = stripArticle(d.term);
+    if (!term) continue;
+    challenges.push({
+      type: 'short_answer',
+      prompt: `In one word or short phrase: what does the book call "${d.text.replace(term, '…').split(/\s+(?:is|are|refers to|means)\b/)[1]?.trim().slice(0, 80) ?? d.value ?? ''}"?`,
+      code: null,
+      options: null,
+      correctAnswer: term,
+      explanation: `From the book: "${d.text}" — the term is "${term}".`,
+      difficulty: 'medium',
+    });
+  }
+
   // 2) Code blocks → predict_output / spot_the_bug
   for (const block of chapter.codeBlocks.slice(0, 8)) {
     const lines = block.code.split('\n').filter((l) => l.trim().length > 0);
@@ -334,6 +389,8 @@ export function generateHeuristically(chapter: ChapterRow, targetCount?: number 
 interface Definition {
   term: string;
   text: string;
+  /** The defining phrase after "is/means/refers to" (for short_answer prompts). */
+  value?: string;
 }
 
 function extractDefinitions(text: string): Definition[] {
@@ -345,7 +402,11 @@ function extractDefinitions(text: string): Definition[] {
   const TERM_STOPWORDS = /^(that|which|what|who|how|why|where|when|there|this|it|they|you|we|if|but|and|or|so|then|in|on|at|to|for|with|by|from|as|an?|the)$/i;
   let m: RegExpExecArray | null;
   while ((m = re.exec(clean)) !== null) {
-    const term = m[1].trim();
+    // "A variable is…" / "An integer is…" / "The runtime is…" — the leading
+    // article is sentence-opening grammar, not part of the term. Strip it
+    // before the filters so the most common English definitional form works.
+    const rawTerm = m[1].trim().replace(/^(?:A|An|The)\s+/, '');
+    const term = rawTerm.trim();
     const value = m[4].trim();
     // Skip garbage terms: multi-clause fragments, stopword endings, or terms
     // that are really sentence fragments from headings/questions.
@@ -358,7 +419,7 @@ function extractDefinitions(text: string): Definition[] {
     if (words.length >= 2 && words.slice(1).some((w) => /^[A-Z]/.test(w))) continue;
     if (value.length < 8 || /^[A-Z][a-z]+\s+[a-z]+\s+(that|which|who)\b/.test(value)) continue;
     if (out.some((d) => d.term === term)) continue;
-    out.push({ term, text: `${term} ${m[2]} ${m[3] ?? ''} ${value}`.replace(/\s+/g, ' ').trim() });
+    out.push({ term, text: `${term} ${m[2]} ${m[3] ?? ''} ${value}`.replace(/\s+/g, ' ').trim(), value });
   }
   return out.slice(0, 8);
 }

@@ -1,5 +1,5 @@
 import type {
-  AuthResponse, AuthUser, BookDetail, BookMeta, Challenge, FeatureRow, GenerateResult,
+  AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, FeatureRow, GenerateResult,
   GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
   Progress, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
@@ -165,6 +165,16 @@ export async function setBookQuestCount(bookId: string, questCount: number | nul
 /** Wipe a book's challenges so the next generate() rebuilds them. */
 export async function regenerateBook(bookId: string): Promise<{ ok: boolean }> {
   return send(`/api/books/${bookId}/regenerate`, 'POST');
+}
+
+/** All challenges in a book grouped by chapter — the teacher's review feed. */
+export async function getBookChallenges(bookId: string): Promise<BookChallengeReview> {
+  return get(`/api/books/${bookId}/challenges`);
+}
+
+/** Reject one challenge and have a fresh one generated in its place. */
+export async function regenerateChallenge(challengeId: string, term: string = 'prelims'): Promise<{ challenge: Challenge }> {
+  return send(`/api/challenges/${challengeId}/regenerate`, 'POST', { term });
 }
 
 export async function listBooks(): Promise<BookMeta[]> {

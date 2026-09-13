@@ -242,6 +242,26 @@ export async function getChallengesForChapter(chapterId: string): Promise<Challe
   return rows.map(mapChallenge);
 }
 
+export async function getChallenge(id: string): Promise<ChallengeRow | null> {
+  const row = await queryOne(`SELECT * FROM challenges WHERE id = $1`, [id]);
+  return row ? mapChallenge(row) : null;
+}
+
+/** Replace one challenge in place (same id, chapter, and ord) — review/regenerate. */
+export async function replaceChallenge(id: string, c: Omit<ChallengeRow, 'id'>): Promise<void> {
+  await query(
+    `UPDATE challenges SET type = $2, prompt = $3, code = $4, options = $5::jsonb, correct_answer = $6, explanation = $7, difficulty = $8, ord = $9
+     WHERE id = $1`,
+    [id, c.type, c.prompt, c.code, c.options ? JSON.stringify(c.options) : null, c.correctAnswer, c.explanation, c.difficulty, c.ord]
+  );
+}
+
+/** Max ord currently used in a chapter (for appending regenerated challenges). */
+export async function nextChallengeOrd(chapterId: string): Promise<number> {
+  const row = await queryOne<{ n: number | null }>(`SELECT MAX(ord) AS n FROM challenges WHERE chapter_id = $1`, [chapterId]);
+  return (row?.n ?? -1) + 1;
+}
+
 export async function getChapterWithText(chapterId: string): Promise<ChapterRow | null> {
   const row = await queryOne<ChapterRow>(
     `SELECT id, book_id AS "bookId", idx, title, text, code_blocks AS "codeBlocks" FROM chapters WHERE id = $1`,

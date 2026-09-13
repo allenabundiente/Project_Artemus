@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
-import type { AuthUser, BookMeta, RosterEntry, Term, TermSettings } from '../types';
+import type { AuthUser, BookChallengeReview, BookMeta, RosterEntry, Term, TermSettings } from '../types';
 import GuildSettings from './GuildSettings';
 import Leaderboard from './Leaderboard';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import Wardrobe from './Wardrobe';
 import RoyalGate from './RoyalGate';
+import ChallengeReview from './ChallengeReview';
 
 interface Props {
   user: AuthUser;
@@ -14,10 +15,12 @@ interface Props {
   onSignOut: () => void;
 }
 
-type View = 'home' | 'settings' | 'leaderboard' | 'wardrobe';
+type View = 'home' | 'settings' | 'leaderboard' | 'wardrobe' | 'review';
 
 export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut }: Props) {
   const [view, setView] = useState<View>('home');
+  /** Which tome the review screen is open on. */
+  const [reviewBook, setReviewBook] = useState<string | null>(null);
   const [guildName, setGuildName] = useState('');
   const [passcode, setPasscode] = useState(guild?.passcode ?? '');
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -282,6 +285,14 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                         >
                           ⟳ RE-SUMMON
                         </button>
+                        <button
+                          className="pixel-btn pixel-btn--ghost"
+                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                          title="Review the challenges and re-summon any bad ones"
+                          onClick={() => { setReviewBook(b.id); setView('review'); }}
+                        >
+                          🔍 REVIEW
+                        </button>
                       </li>
                     );
                   })}
@@ -290,6 +301,15 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
             </>
           )}
         </>
+      )}
+
+      {view === 'review' && reviewBook && (
+        <ChallengeReview
+          bookId={reviewBook}
+          term={term}
+          onBack={() => setView('home')}
+          onRegenerated={() => setNotice('Fresh challenge summoned in its place.')}
+        />
       )}
 
       {view === 'settings' && guild && <GuildSettings onSaved={() => setNotice('Guild settings saved. New monster generations will use them.')} />}

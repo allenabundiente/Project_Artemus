@@ -1,7 +1,7 @@
 import { Router, json } from 'express';
 import multer from 'multer';
 import { parsePdf } from '../services/pdfParser.js';
-import { generateWithLlm, generateHeuristically, perChapterTarget, clampTargetCount, type ChapterContent, type GenerationOptions } from '../services/contentGenerator.js';
+import { generateWithLlm, generateHeuristically, perChapterTarget, clampTargetCount, type ChapterContent, type GeneratedChallenge, type GenerationOptions } from '../services/contentGenerator.js';
 import { isLlmConfigured, activeProvider, llmModeLabel } from '../services/llmClient.js';
 import { computeScore, DEFAULT_SCORE_WEIGHTS, type ScoreWeights } from '../services/scoring.js';
 import { resolveTermSettings, sanitizeTermSettings, TERMS, type TermSettings } from '../services/termSettings.js';
@@ -18,6 +18,7 @@ import {
   insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
+  getChallenge, replaceChallenge, nextChallengeOrd,
   getGlobalMapConfig, getGuildMapSettings, setGuildMapTheme,
   listGuildsWithCounts, removeGuildMember,
   type GuildRow, type UserRow, type ChapterRow,
@@ -610,6 +611,77 @@ export function createApiRouter(): Router {
       return res.json({ bookId, questCount: updated.questCount });
     }
     res.json({ bookId, questCount: book.questCount });
+  });
+
+  // --- teacher: review / regenerate individual challenges ------------------------
+
+  /** Every challenge in a book, grouped by chapter — the review screen's feed. */
+  router.get('/books/:id/challenges', requireAuth, async (req, res) => {
+    const bookId = String(req.params.id);
+    const book = await getBook(bookId);
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const user = await getUserById(req.user!.id);
+    const allowed = book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId);
+    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+    const chapters = await getChapters(bookId);
+    const out = await Promise.all(chapters.map(async (c) => ({
+      chapterId: c.id, idx: c.idx, title: c.title,
+      challenges: await getChallengesForChapter(c.id),
+    })));
+    res.json({ bookId, chapters: out });
+  });
+
+  /**
+   * Reject + regenerate ONE challenge. The LLM is asked for a fresh question on
+   * the same chapter; heuristic mode mutates type so the swap is always real.
+   * The replacement keeps the same slot (same chapter, new ord at the end of
+   * the chapter's bench) so runs in progress are not invalidated mid-flight.
+   */
+  router.post('/challenges/:id/regenerate', requireAuth, async (req, res) => {
+    const challenge = await getChallenge(String(req.params.id));
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+    const book = await getBook(challenge.bookId);
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const user = await getUserById(req.user!.id);
+    const isOwner = book.ownerId === user?.id;
+    const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
+    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+
+    const chapter = await getChapter(challenge.chapterId);
+    if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
+    const term = typeof req.body?.term === 'string' ? req.body.term : 'prelims';
+    const guild = book.guildId ? await getGuild(book.guildId) : null;
+    const ts = resolveTermSettings(term, guild?.termSettings ?? null);
+    const genOpts: GenerationOptions = {
+      term,
+      monsterDifficulty: ts.monsterDifficulty,
+      difficultyMix: ts.difficultyMix,
+      targetCount: book.questCount,
+    };
+
+    let fresh: GeneratedChallenge | null = null;
+    if (isLlmConfigured()) {
+      try {
+        // Ask for a whole batch, then pick the first challenge that is genuinely
+        // different from the rejected one (models love to echo the same idea).
+        const content = await generateWithLlm(chapter, genOpts);
+        fresh = content.challenges.find((c) => c.prompt.trim() !== challenge.prompt.trim()) ?? content.challenges[0] ?? null;
+      } catch (e) {
+        console.error('[challengeRegenerate] LLM path failed:', (e as Error).message);
+      }
+    }
+    if (!fresh) {
+      // Deterministic fallback: rebuild heuristically and take a challenge whose
+      // prompt differs; if nothing differs, still rotate so the teacher sees change.
+      const content = generateHeuristically(chapter);
+      fresh = content.challenges.find((c) => c.prompt.trim() !== challenge.prompt.trim()) ?? content.challenges[0] ?? null;
+    }
+    if (!fresh) return res.status(500).json({ error: 'Could not generate a replacement challenge' });
+
+    const ord = await nextChallengeOrd(chapter.id);
+    await replaceChallenge(challenge.id, { ...fresh, bookId: chapter.bookId, chapterId: chapter.id, ord });
+    const updated = await getChallenge(challenge.id);
+    res.json({ challenge: updated });
   });
 
   // --- Progress --------------------------------------------------------------------

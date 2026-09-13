@@ -323,6 +323,7 @@ canvas {
   font-size: 2.4rem;
   letter-spacing: 2px;
   color: var(--d-gold);
+  text-align: center;
   text-shadow: 3px 3px 0 var(--d-red), 6px 6px 0 var(--d-black);
 }
 

@@ -35,6 +35,18 @@ It's built for two kinds of people:
 
 This gets a new dev from a fresh clone to a playable build locally, including the database and a sample book.
 
+### 0. One command (optional)
+
+Once `backend/.env` has `DATABASE_URL`, this single script builds the frontend, applies migrations, and serves the app + API on ONE port (default 4010):
+
+```bash
+./run.sh            # build + migrate + serve everything on one port
+./run.sh --dev      # classic two-process dev mode (backend :4010, vite :5173)
+./run.sh --rebuild  # force a fresh frontend build, then serve
+```
+
+Prefer containers? `docker build -t questbook . && docker run -p 8080:8080 -e DATABASE_URL=... -e JWT_SECRET=... questbook` — the image migrates on start and serves the SPA from the same server.
+
 ### 1. Install dependencies
 
 Two package installs, one per side:

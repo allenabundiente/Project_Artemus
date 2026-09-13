@@ -1,0 +1,11 @@
+# Keep the build context lean and independent of local dev state.
+**/node_modules
+**/dist
+**/public
+backend/.env
+backend/.env.*
+!.env.example
+.git
+.gitignore
+*.log
+.DS_Store

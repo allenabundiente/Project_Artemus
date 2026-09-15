@@ -7,6 +7,8 @@ import ChallengeDialog from './ChallengeDialog';
 interface Props {
   /** Question pool for this battle (chapter challenges). */
   challenges: Challenge[];
+  /** Sprite slot of the monster being fought (theme roster may swap it). */
+  monsterSlot?: string;
   /** The challenge this monster leads with (regular battles). */
   leadChallenge?: Challenge;
   /** Player hearts (mirrored from the engine). */
@@ -23,7 +25,12 @@ interface Props {
 
 const MONSTER_MAX_HP = 3;
 
-export default function BattleScreen({ challenges, leadChallenge, lives, boss = false, onDamage, onRetreat, onVictory }: Props) {
+export default function BattleScreen({ challenges, monsterSlot, leadChallenge, lives, boss = false, onDamage, onRetreat, onVictory }: Props) {
+  // A theme's roster can swap the classic goblin for any sprite slot — but
+  // only if that slot actually rendered on the map (PNG exists on disk).
+  // Otherwise fall back to the classic monster art so battles never show a
+  // phantom slot.
+  const art = monsterSlot && spriteLoads(monsterSlot) ? monsterSlot : 'enemy_goblin';
   const [monsterHp, setMonsterHp] = useState(MONSTER_MAX_HP);
   const [qIndex, setQIndex] = useState(0);
   const [round, setRound] = useState(0);
@@ -86,7 +93,7 @@ export default function BattleScreen({ challenges, leadChallenge, lives, boss = 
         <div style={{ textAlign: 'center' }}>
           <img
             key={hurt ? 'hurt' : 'ok'}
-            src={spriteDataUrl(hurt ? 'bookworm_hurt' : boss ? 'boss' : 'enemy_goblin')}
+            src={spriteDataUrl(hurt ? 'bookworm_hurt' : boss ? 'boss' : art)}
             alt={monsterName}
             style={{
               width: boss ? 96 : 72,
@@ -149,6 +156,13 @@ export default function BattleScreen({ challenges, leadChallenge, lives, boss = 
       )}
     </div>
   );
+}
+
+/** True once the given slot's PNG is confirmed present on the server. */
+function spriteLoads(slot: string): boolean {
+  const probe = new Image();
+  probe.src = `/sprites/${slot}.png`;
+  return probe.complete && probe.naturalWidth > 0;
 }
 
 /** Bosses get the hardest questions first; regular monsters lead with their own challenge. */

@@ -243,6 +243,13 @@ canvas {
   color: var(--d-black);
 }
 
+/* Teacher-locked (quest cap or closed availability window) — iron-gray padlock node. */
+.map-node--capped {
+  background: var(--d-stone);
+  color: var(--d-black);
+  opacity: 0.85;
+}
+
 .map-node--current {
   outline: 3px solid var(--d-parchment);
 }

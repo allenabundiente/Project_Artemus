@@ -15,7 +15,13 @@ export function spriteDataUrl(name: string): string {
   const cached = gridCache.get(name);
   if (cached) return cached;
   const def = SPRITES.find((s) => s.name === name) ?? AVATAR_GRIDS.find((s) => s.name === name);
-  const grid = def ? def.grid : ['..rr..', '.rrrr.', 'rrrrrr', '.rrrr.', '..rr..'];
+  if (!def) {
+    // Not a canonical grid slot — a custom upload (Theme Forge sprite swap or
+    // animation frame). Serve the PNG directly: browsers cache it, CSS keeps
+    // it pixelated, and callers gate on existence before asking for it.
+    return `/sprites/${name}.png`;
+  }
+  const grid = def.grid;
   const { width, height, rgba } = renderGrid(grid);
   const canvas = document.createElement('canvas');
   canvas.width = width;

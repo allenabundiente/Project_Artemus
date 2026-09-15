@@ -4,7 +4,7 @@
 import pg from 'pg';
 import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow } from './types.js';
 
-export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow } from './types.js';
+export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow, type CompiledLesson, type QuestBlank } from './types.js';
 
 const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/codebook_arcade';
 
@@ -88,11 +88,23 @@ export interface BookRow {
   filename: string;
   ownerId: string | null;
   guildId: string | null;
+  /** Teacher-set cap on playable chapters (quests); null = no cap. */
+  questLimit: number | null;
+  /** Availability window (teacher-scheduled); null = always available. */
+  availableFrom: Date | null;
+  availableUntil: Date | null;
   createdAt: Date;
 }
 
 function mapBook(r: any): BookRow {
-  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, createdAt: r.created_at };
+  return {
+    id: r.id, title: r.title, filename: r.filename,
+    ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null,
+    questLimit: r.quest_limit ?? null,
+    availableFrom: r.available_from ? new Date(r.available_from) : null,
+    availableUntil: r.available_until ? new Date(r.available_until) : null,
+    createdAt: r.created_at,
+  };
 }
 
 export interface UserRow {
@@ -173,17 +185,29 @@ export async function insertBook(title: string, filename: string, ownerId: strin
 
 export async function insertChapter(bookId: string, idx: number, title: string, text: string, codeBlocks: CodeBlock[]): Promise<string> {
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO chapters (book_id, idx, title, text, code_blocks) VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id`,
+    `INSERT INTO chapters (book_id, idx, title, text, code_blocks, compiled) VALUES ($1, $2, $3, $4, $5::jsonb, NULL) RETURNING id`,
     [bookId, idx, title, text, JSON.stringify(codeBlocks)]
   );
   return row!.id;
 }
 
+/** Persist a chapter's Pass-1 compiled-lesson summary (alongside raw data). */
+export async function setChapterCompiled(chapterId: string, compiled: CompiledLesson): Promise<void> {
+  await query(`UPDATE chapters SET compiled = $2::jsonb WHERE id = $1`, [chapterId, JSON.stringify(compiled)]);
+}
+
+/** Read back a chapter's compiled summary, if one was ever stored. */
+export async function getChapterCompiled(chapterId: string): Promise<CompiledLesson | null> {
+  const row = await queryOne<{ compiled: CompiledLesson | null }>(`SELECT compiled FROM chapters WHERE id = $1`, [chapterId]);
+  return row?.compiled ?? null;
+}
+
 export async function insertChallenge(c: Omit<ChallengeRow, 'id'>): Promise<string> {
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO challenges (book_id, chapter_id, type, prompt, code, options, correct_answer, explanation, difficulty, ord)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10) RETURNING id`,
-    [c.bookId, c.chapterId, c.type, c.prompt, c.code, c.options ? JSON.stringify(c.options) : null, c.correctAnswer, c.explanation, c.difficulty, c.ord]
+    `INSERT INTO challenges (book_id, chapter_id, type, prompt, code, options, correct_answer, explanation, difficulty, ord, quest)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11::jsonb) RETURNING id`,
+    [c.bookId, c.chapterId, c.type, c.prompt, c.code, c.options ? JSON.stringify(c.options) : null, c.correctAnswer, c.explanation, c.difficulty, c.ord,
+     c.quest ? JSON.stringify(c.quest) : null]
   );
   return row!.id;
 }
@@ -207,13 +231,37 @@ export async function getBook(id: string): Promise<BookRow | null> {
 
 export async function getChapters(bookId: string): Promise<ChapterRow[]> {
   const rows = await query(`SELECT * FROM chapters WHERE book_id = $1 ORDER BY idx`, [bookId]);
-  return rows.map((r: any) => ({ id: r.id, bookId: r.book_id, idx: r.idx, title: r.title, text: r.text, codeBlocks: r.code_blocks ?? [] }));
+  return rows.map((r: any) => ({
+    id: r.id, bookId: r.book_id, idx: r.idx, title: r.title, text: r.text,
+    codeBlocks: r.code_blocks ?? [], compiled: r.compiled ?? null,
+  }));
+}
+
+/**
+ * Playable chapters of a book after the teacher's quest rules apply:
+ *   • quest_limit    — only the first N chapters are playable;
+ *   • availability   — outside the window NO chapters are playable.
+ * Ordering (limit → window) matters for the status message: we surface the
+ * limit first, then narrow further by schedule.
+ */
+export function applyBookRules(
+  book: Pick<BookRow, 'questLimit' | 'availableFrom' | 'availableUntil'>,
+  chapters: ChapterRow[],
+  now = new Date(),
+): { playable: ChapterRow[]; status: 'open' | 'locked_limit' | 'locked_window' } {
+  if (book.availableFrom && now < book.availableFrom) return { playable: [], status: 'locked_window' };
+  if (book.availableUntil && now > book.availableUntil) return { playable: [], status: 'locked_window' };
+  const limited = book.questLimit != null ? chapters.slice(0, book.questLimit) : chapters;
+  return { playable: limited, status: limited.length === 0 ? 'locked_limit' : 'open' };
 }
 
 export async function getChapter(id: string): Promise<ChapterRow | null> {
   const row = await queryOne(`SELECT * FROM chapters WHERE id = $1`, [id]);
   if (!row) return null;
-  return { id: row.id, bookId: row.book_id, idx: row.idx, title: row.title, text: row.text, codeBlocks: (row as any).code_blocks ?? [] };
+  return {
+    id: row.id, bookId: row.book_id, idx: row.idx, title: row.title, text: row.text,
+    codeBlocks: (row as any).code_blocks ?? [], compiled: (row as any).compiled ?? null,
+  };
 }
 
 function mapChallenge(r: any): ChallengeRow {
@@ -221,6 +269,7 @@ function mapChallenge(r: any): ChallengeRow {
     id: r.id, bookId: r.book_id, chapterId: r.chapter_id, type: r.type, prompt: r.prompt,
     code: r.code ?? null, options: r.options ?? null, correctAnswer: r.correct_answer,
     explanation: r.explanation, difficulty: r.difficulty, ord: r.ord,
+    quest: r.quest ?? null,
   };
 }
 
@@ -236,7 +285,7 @@ export async function getChallengesForChapter(chapterId: string): Promise<Challe
 
 export async function getChapterWithText(chapterId: string): Promise<ChapterRow | null> {
   const row = await queryOne<ChapterRow>(
-    `SELECT id, book_id AS "bookId", idx, title, text, code_blocks AS "codeBlocks" FROM chapters WHERE id = $1`,
+    `SELECT id, book_id AS "bookId", idx, title, text, code_blocks AS "codeBlocks", compiled FROM chapters WHERE id = $1`,
     [chapterId],
   );
   return row ?? null;

@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as api from '../api';
 import type { FeatureRow, MapConfig, ShopItem, ThemeMeta } from '../types';
 import { spriteDataUrl } from '../game/sprites';
+import { SPRITES } from '../game/spriteGrids';
+import { AVATAR_GRIDS } from '../game/avatarGrids';
 import type { AnimDef, CustomThemePayload } from '../api';
 
 type Tab = 'features' | 'sprites' | 'animations' | 'themes' | 'map' | 'shop';
@@ -330,10 +332,37 @@ const THEME_PRESETS: Record<string, Partial<CustomThemePayload>> = {
   frost: { sky: '#14202e', stars: '#d7ecff', farHills: '#2a4157', nearHills: '#3a5a73', pit: '#040a12', floorTop: '#7f93a8', floorBody: '#43525f', floorSpeckle: '#5a6b7a', hpFilled: '#a82a2a', hpEmpty: '#43525f', dustColor: 'rgba(210, 230, 250, 0.7)' },
 };
 
+/**
+ * Module-level cache of every sprite slot on the server (canonical + custom
+ * uploads). Filled lazily by the Theme Forge's slot picker; the cache lets
+ * re-opens render instantly without re-fetching.
+ */
+let spriteListCache: string[] = [];
+
 function ThemesTab({ themes }: { themes: ThemeMeta[] }) {
   const [id, setId] = useState('');
   const [form, setForm] = useState<Partial<CustomThemePayload>>({ name: '', ...THEME_PRESETS.ember });
   const [monsters, setMonsters] = useState('');
+  const [swaps, setSwaps] = useState<Record<string, string>>({});
+  const [pickOpen, setPickOpen] = useState(false);
+  const [allSlots, setAllSlots] = useState<string[] | null>(spriteListCache.length > 0 ? spriteListCache : null);
+  const [pickFilter, setPickFilter] = useState('');
+  const [pickFor, setPickFor] = useState<string | null>(null);
+  const [overridePngs, setOverridePngs] = useState<Record<string, File>>({});
+
+  // Every slot on the server (canonical grids + custom uploads) — the picker
+  // browses all of them. Falls back to the in-code grid names when the admin
+  // API is unreachable.
+  useEffect(() => {
+    api.getAdminSprites()
+      .then((s) => { spriteListCache = s.files; setAllSlots(s.files); })
+      .catch(() => setAllSlots((cur) => cur ?? SPRITES.map((s) => s.name)));
+  }, []);
+
+  // Grid slots render from the in-code raster (works even if the PNG is
+  // missing); custom uploads render straight from their PNG file.
+  const gridSlots = useMemo(() => new Set([...SPRITES, ...AVATAR_GRIDS].map((s) => s.name)), []);
+  const slotSrc = (s: string) => (gridSlots.has(s) ? spriteDataUrl(s) : `/sprites/${s}.png`);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -345,15 +374,27 @@ function ThemesTab({ themes }: { themes: ThemeMeta[] }) {
       setNotice('Theme id and display name are required.');
       return;
     }
+    // Wait for any staged PNG uploads first — swaps reference their filenames.
+    if (Object.keys(overridePngs).length > 0) {
+      try {
+        const res = await api.uploadSpriteFrames(Object.keys(overridePngs), Object.values(overridePngs));
+        setNotice(`Uploaded ${res.uploaded.length} custom sprite${res.uploaded.length === 1 ? '' : 's'} — `);
+      } catch (e) {
+        setNotice(`Sprite upload failed: ${(e as Error).message}`);
+        return;
+      }
+    }
     setBusy(true);
     try {
       const payload: CustomThemePayload = {
         ...(THEME_PRESETS.ember as CustomThemePayload),
         ...form,
         monsters: monsters.split(',').map((s) => s.trim()).filter(Boolean),
+        spriteOverrides: Object.keys(swaps).length > 0 ? swaps : undefined,
       } as CustomThemePayload;
       await api.saveCustomTheme(id.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_'), payload);
       setNotice(`Theme "${form.name}" saved — it is live in the theme picker and quest rotation.`);
+      setOverridePngs({});
     } catch (e) {
       setNotice((e as Error).message);
     } finally {
@@ -417,6 +458,97 @@ function ThemesTab({ themes }: { themes: ThemeMeta[] }) {
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
         <input className="pixel-input" placeholder="patrol monsters (comma-separated sprite slots, e.g. enemy_bat, dragon_flap)" value={monsters} onChange={(e) => setMonsters(e.target.value)} style={{ flex: 1, minWidth: 240 }} />
+      </div>
+
+      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: '0.6rem 0 0.3rem' }}>🧩 SPRITE SWAPS (optional — replace any sprite slot just for this map)</p>
+      {Object.keys(swaps).length === 0 && (
+        <p className="status-text" style={{ margin: '0 0 0.4rem' }}>No swaps — this map uses the standard sprites.</p>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.5rem' }}>
+        {Object.entries(swaps).map(([slot, file]) => (
+          <div key={slot} style={{ border: '1px solid rgba(255,255,255,0.15)', padding: '0.4rem', textAlign: 'center' }}>
+            <p className="term-font" style={{ fontSize: '0.6rem', margin: '0 0 0.25rem' }}>
+              {slot} → <strong style={{ color: 'var(--d-gold)' }}>{file}</strong>
+            </p>
+            <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center', alignItems: 'flex-end' }}>
+              <img src={slotSrc(slot)} alt={slot} title="current art"
+                style={{ width: 36, height: 36, imageRendering: 'pixelated', objectFit: 'contain', background: 'var(--d-black)' }}
+                onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+              <span className="term-font" style={{ fontSize: '0.8rem' }}>→</span>
+              <img src={overridePngs[file] ? URL.createObjectURL(overridePngs[file]) : `/sprites/${file}.png`} alt={file} title="replacement art"
+                style={{ width: 36, height: 36, imageRendering: 'pixelated', objectFit: 'contain', background: 'var(--d-black)' }}
+                onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+            </div>
+            <div style={{ display: 'flex', gap: 4, justifyContent: 'center', marginTop: '0.3rem' }}>
+              <label className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem', cursor: 'pointer' }} title="Upload replacement PNG">
+                {overridePngs[file] ? '⬆✓' : '⬆'}
+                <input type="file" accept="image/png" style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) setOverridePngs((m) => ({ ...m, [file]: f }));
+                    e.target.value = '';
+                  }} />
+              </label>
+              <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} title="Change replacement slot"
+                onClick={() => { setPickFor(slot); setPickOpen(true); }}>⚙</button>
+              <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} title="Remove swap"
+                onClick={() => setSwaps((m) => { const n = { ...m }; delete n[slot]; return n; })}>✕</button>
+            </div>
+          </div>
+        ))}
+        <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem', alignSelf: 'center', minHeight: 64 }}
+          onClick={() => { setPickFor(null); setPickOpen(true); }}>
+          + ADD SWAP
+        </button>
+      </div>
+
+      {pickOpen && (
+        <div style={{ border: '2px solid var(--d-darkwood)', padding: '0.6rem', marginBottom: '0.6rem' }}>
+          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.4rem' }}>
+            <p className="pixel-font" style={{ fontSize: '0.6rem', margin: 0, flex: 1 }}>
+              {pickFor ? `REPLACEMENT FOR: ${pickFor}` : 'WHICH SPRITE SLOT SHOULD THIS MAP REPLACE?'}
+            </p>
+            <input className="pixel-input" placeholder="Filter slots…" value={pickFilter} onChange={(e) => setPickFilter(e.target.value)} style={{ width: 150 }} />
+            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={() => setPickOpen(false)}>✕</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(88px, 1fr))', gap: '0.3rem', maxHeight: 220, overflowY: 'auto' }}>
+            {(allSlots ?? []).filter((s) => s.includes(pickFilter.toLowerCase())).map((s) => {
+              const isTarget = !pickFor && !!swaps[s];
+              const isReplacement = pickFor !== null && swaps[pickFor] === s;
+              return (
+                <button
+                  key={s}
+                  title={isTarget ? 'Already being replaced on this map' : isReplacement ? 'Current replacement for ' + pickFor : s}
+                  style={{
+                    textAlign: 'center', padding: '0.25rem', cursor: 'pointer',
+                    border: isReplacement ? '2px solid var(--d-gold)' : isTarget ? '2px solid var(--p-red)' : '1px solid rgba(255,255,255,0.15)',
+                    background: 'transparent', color: 'var(--d-parchment)',
+                  }}
+                  onClick={() => {
+                    if (pickFor === null) {
+                      setSwaps((m) => (m[s] ? m : { ...m, [s]: s })); // start same→same
+                      setPickFor(s);
+                    } else {
+                      setSwaps((m) => ({ ...m, [pickFor]: s }));
+                      setPickOpen(false);
+                      setPickFor(null);
+                    }
+                  }}
+                >
+                  <img src={slotSrc(s)} alt={s} style={{ width: 32, height: 32, imageRendering: 'pixelated', objectFit: 'contain' }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+                  <p className="term-font" style={{ fontSize: '0.55rem', margin: '0.1rem 0 0', wordBreak: 'break-all' }}>{s}</p>
+                </button>
+              );
+            })}
+          </div>
+          <p className="term-font" style={{ fontSize: '0.75rem', color: 'var(--d-stone-light)', margin: '0.4rem 0 0' }}>
+            Red-bordered slots are already replaced on this map (click one to change its replacement). Gold border marks the current replacement.
+          </p>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
         <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.65rem' }} onClick={() => void save()} disabled={busy || !id.trim() || !form.name?.trim()}>
           {busy ? '…' : 'SAVE THEME'}
         </button>

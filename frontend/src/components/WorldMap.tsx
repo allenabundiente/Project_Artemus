@@ -9,15 +9,28 @@ interface Props {
 
 export default function WorldMap({ book, progress, term, onEnterLevel }: Props) {
   const done = new Set(progress.completedChapters);
-  const firstOpen = book.chapters.find((c) => !done.has(c.id));
 
-  function nodeState(idx: number, chapterId: string): 'done' | 'open' | 'locked' {
+  // Teacher quest rules: availability window first, then the quest cap.
+  const now = Date.now();
+  const beforeWindow = !!book.availableFrom && now < new Date(book.availableFrom).getTime();
+  const afterWindow = !!book.availableUntil && now > new Date(book.availableUntil).getTime();
+  const windowLocked = beforeWindow || afterWindow;
+  const limit = book.questLimit ?? null;
+
+  function nodeState(idx: number, chapterId: string): 'done' | 'open' | 'locked' | 'capped' {
+    if (windowLocked) return idx === 0 || done.has(book.chapters[idx - 1]?.id ?? '') ? 'capped' : 'locked';
     if (done.has(chapterId)) return 'done';
+    if (limit !== null && idx >= limit) return 'capped';
     if (idx === 0) return 'open';
     const prev = book.chapters[idx - 1];
     if (prev && done.has(prev.id)) return 'open';
     return 'locked';
   }
+
+  // First playable, unfinished quest under the teacher's rules.
+  const firstOpen = windowLocked
+    ? null
+    : book.chapters.find((c) => !done.has(c.id) && (limit === null || book.chapters.findIndex((x) => x.id === c.id) < limit));
 
   return (
     <div style={{ maxWidth: 860, margin: '0 auto' }}>
@@ -50,11 +63,23 @@ export default function WorldMap({ book, progress, term, onEnterLevel }: Props) 
                 <div style={{ textAlign: 'center' }}>
                   <button
                     className={`map-node map-node--${state} ${isCurrent ? 'map-node--current' : ''}`}
-                    disabled={state === 'locked'}
-                    title={state === 'locked' ? 'Clear the previous quest first' : ch.title}
+                    disabled={state === 'locked' || state === 'capped'}
+                    title={
+                      state === 'locked'
+                        ? 'Clear the previous quest first'
+                        : state === 'capped'
+                          ? limit !== null && idx >= limit
+                            ? `Beyond your teacher's quest limit (${limit} quests)`
+                            : windowLocked
+                              ? beforeWindow
+                                ? `Opens ${new Date(book.availableFrom!).toLocaleString()}`
+                                : `Closed ${new Date(book.availableUntil!).toLocaleString()}`
+                              : ch.title
+                          : ch.title
+                    }
                     onClick={() => onEnterLevel(ch.id, idx)}
                   >
-                    {state === 'locked' ? '✕' : state === 'done' ? '★' : idx + 1}
+                    {state === 'locked' ? '✕' : state === 'capped' ? '🔒' : state === 'done' ? '★' : idx + 1}
                   </button>
                   <div
                     className="term-font"
@@ -75,16 +100,35 @@ export default function WorldMap({ book, progress, term, onEnterLevel }: Props) 
             );
           })}
         </div>
-        {firstOpen && (
-          <p className="status-text" style={{ marginBottom: 0 }}>
-            ▸ NEXT QUEST: {firstOpen.title}
+        {windowLocked && (
+          <p className="status-text" style={{ marginBottom: 0, color: 'var(--d-rose)' }}>
+            {beforeWindow
+              ? `🔒 This tome opens ${new Date(book.availableFrom!).toLocaleString()} — come back then, adventurer.`
+              : `🔒 This tome closed ${new Date(book.availableUntil!).toLocaleString()} — the quest window has passed.`}
           </p>
         )}
-        {!firstOpen && (
+        {!windowLocked && limit !== null && (
           <p className="status-text" style={{ marginBottom: 0 }}>
-            ★ ALL QUESTS CLEAR — the tome is conquered!
+            📜 Your teacher opened the first {limit} quest{limit === 1 ? '' : 's'} of this tome.
           </p>
         )}
+        {(() => {
+          if (firstOpen) {
+            return (
+              <p className="status-text" style={{ marginBottom: 0 }}>
+                ▸ NEXT QUEST: {firstOpen.title}
+              </p>
+            );
+          }
+          if (!windowLocked && book.chapters.length > 0 && book.chapters.every((c) => done.has(c.id))) {
+            return (
+              <p className="status-text" style={{ marginBottom: 0 }}>
+                ★ ALL QUESTS CLEAR — the tome is conquered!
+              </p>
+            );
+          }
+          return null;
+        })()}
       </div>
 
       <p className="term-font" style={{ color: 'var(--d-stone-light)' }}>

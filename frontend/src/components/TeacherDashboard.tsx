@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
 import type { AuthUser, BookMeta, RosterEntry, Term, TermSettings } from '../types';
+import BookRulesRow from './BookRulesRow';
 import GuildSettings from './GuildSettings';
 import Leaderboard from './Leaderboard';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
@@ -188,10 +189,15 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
 
               <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto' }}>
                 <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>ASSIGNED TOMES</p>
+                <p className="term-font" style={{ fontSize: '0.85rem', color: 'var(--d-stone-light)', margin: '0 0 0.5rem' }}>
+                  Cap how many quests each PDF yields and schedule when it opens — students see locks on their realm map.
+                </p>
                 {books.length === 0 && <p className="status-text" style={{ margin: 0 }}>No tomes assigned yet.</p>}
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                   {books.map((b) => (
-                    <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.25rem' }}>▸ {b.title}</li>
+                    <BookRulesRow key={b.id} book={b} onSaved={(rules) => {
+                      setBooks((bs) => bs.map((x) => (x.id === b.id ? { ...x, ...rules } : x)));
+                    }} />
                   ))}
                 </ul>
               </div>

@@ -5,7 +5,7 @@ import { ArcadeEngine, buildLayout, BACKING_W, BACKING_H } from '../game/engine'
 import { loadSprites, spriteDataUrl } from '../game/sprites';
 import { getAnimations, loadExtraSprites } from '../game/animations';
 import { sfx } from '../game/sfx';
-import { loadCustomThemes } from '../game/themes';
+import { loadCustomThemes, resolveTheme } from '../game/themes';
 import BattleScreen from './BattleScreen';
 
 interface Props {
@@ -58,6 +58,8 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   const [failOutcome, setFailOutcome] = useState<FailOutcome | null>(null);
   const [failError, setFailError] = useState<string | null>(null);
   const termSettingsRef = useRef<{ timeLimitSeconds: number } | null>(null);
+  /** Sprite slot of the monster the player is currently battling. */
+  const fightingSlotRef = useRef<string>('enemy_goblin');
 
   // --- init: load challenges + term settings, build layout, spin up engine ----
   useEffect(() => {
@@ -93,10 +95,16 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         const urlTheme = new URLSearchParams(window.location.search).get('theme');
         const themeId = urlTheme
           ?? await api.resolveMap(chapterId, termInfo.settings.monsterDifficulty).then((r) => r.theme).catch(() => undefined);
+        const resolvedTheme = resolveTheme(themeId);
+        // The monster the player is actually fighting (theme rosters can swap
+        // the classic goblin per map) — battles show its art, swapped too.
+        const fightingSlot = (i: number) =>
+          resolvedTheme.monsters?.[i % (resolvedTheme.monsters.length || 1)] ?? 'enemy_goblin';
         const engine = new ArcadeEngine(canvas, layout, sprites, {
           onMonsterHit: (i) => {
             setBattleMonster(i);
             setBattleKey((k) => k + 1);
+            fightingSlotRef.current = fightingSlot(i);
             setPhase('battle');
           },
           onBossEncounter: () => {
@@ -117,6 +125,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         avatar ? { ...avatar } : undefined,
         animations);
         engineRef.current = engine;
+        fightingSlotRef.current = 'enemy_goblin';
         setTimeLeft(termInfo.settings.timeLimitSeconds);
         setPhase('playing');
         engine.start();
@@ -326,6 +335,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
           <BattleScreen
             key={`battle-${battleKey}`}
             challenges={challengesRef.current}
+            monsterSlot={fightingSlotRef.current}
             leadChallenge={challengesRef.current[battleMonster]}
             lives={lives}
             onDamage={handleBattleDamage}

@@ -18,7 +18,7 @@ import {
   insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
-  getGlobalMapConfig, getGuildMapSettings, setGuildMapTheme,
+  getGlobalMapConfig, getGuildMapSettings, setGuildMapTheme, applyBookRules,
   type GuildRow, type UserRow, type ChapterRow,
 } from '../db/db.js';
 
@@ -146,14 +146,15 @@ export function createApiRouter(): Router {
   });
 
   // Which map themes exist (used by teacher skin picker + admin panel): the
-  // static built-ins plus admin-defined custom themes (colors + sprite swaps
-  // persisted backend-side, registered into the game at quest start).
+  // static built-ins plus admin-defined custom themes. Custom themes ship
+  // their FULL record — colors, patrol monsters, sprite swaps — so clients can
+  // preview and render them without touching the admin-only endpoints.
   router.get('/themes', requireAuth, (_req, res) => {
     res.json({
       themes: [
         { id: 'dungeon', name: 'Dungeon Night', builtin: true },
         { id: 'forest', name: 'Firefly Glade', builtin: true },
-        ...listCustomThemes().map((t) => ({ id: t.id, name: String(t.name ?? t.id), builtin: false })),
+        ...listCustomThemes(),
       ],
     });
   });
@@ -453,6 +454,21 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     const allowed = book && (book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId));
     if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+
+    // Enforce the teacher's quest rules server-side — for STUDENTS only.
+    // Teachers/admins keep preview access to tomes they assigned (their own
+    // lock must not lock them out), while guild members and solo students
+    // are bound by the cap and the availability window.
+    if (user!.role === 'student') {
+      const { playable, status } = applyBookRules(book, await getChapters(book.id));
+      if (status !== 'open') {
+        return res.status(423).json({ error: status === 'locked_window' ? 'locked_window' : 'locked_limit', feature: 'quest' });
+      }
+      if (!playable.some((c) => c.id === chapterId)) {
+        return res.status(423).json({ error: 'locked_limit', feature: 'quest' });
+      }
+    }
+
     res.json({ chapter: { id: chapter.id, title: chapter.title }, challenges: await getChallengesForChapter(chapterId) });
   });
 
@@ -483,6 +499,62 @@ export function createApiRouter(): Router {
   });
 
   // --- Progress --------------------------------------------------------------------
+
+  // --- Book quest rules (teacher): per-PDF quest cap + availability window ---
+  //
+  // quest_limit caps how many chapters of the tome are playable; the window
+  // (available_from / available_until) schedules when the whole tome is open.
+  // null = unlimited / always. Stored on the books row so every client sees
+  // the same rules.
+
+  const TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/; // datetime-local or ISO
+
+  router.put('/books/:id/rules', requireAuth, async (req, res) => {
+    const book = await getBook(String(req.params.id));
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const isOwner = book.ownerId === user.id;
+    const isGuildTeacher = book.guildId && (user.role === 'teacher' || user.role === 'admin') && user.guildId === book.guildId;
+    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+
+    const b = req.body ?? {};
+    let questLimit: number | null = null;
+    if (b.questLimit !== null && b.questLimit !== undefined && b.questLimit !== '') {
+      questLimit = Math.floor(Number(b.questLimit));
+      if (!Number.isFinite(questLimit) || questLimit < 1 || questLimit > 500) {
+        return res.status(400).json({ error: 'questLimit must be between 1 and 500 (or null to remove)' });
+      }
+    }
+    const parseTs = (v: unknown): Date | null | string => {
+      if (v === null || v === undefined || v === '') return null;
+      if (typeof v !== 'string' || !TS_RE.test(v)) return 'bad';
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? 'bad' : d;
+    };
+    const from = parseTs(b.availableFrom);
+    const until = parseTs(b.availableUntil);
+    if (from === 'bad' || until === 'bad') return res.status(400).json({ error: 'availableFrom/availableUntil must be ISO or datetime-local strings' });
+    if (from instanceof Date && until instanceof Date && from > until) {
+      return res.status(400).json({ error: 'availableFrom must come before availableUntil' });
+    }
+
+    const row = await queryOne<{ id: string; quest_limit: number | null; available_from: Date | null; available_until: Date | null }>(
+      `UPDATE books
+       SET quest_limit = $1, available_from = $2, available_until = $3
+       WHERE id = $4
+       RETURNING quest_limit, available_from, available_until`,
+      [questLimit, from ?? null, until ?? null, book.id],
+    );
+    res.json({
+      ok: true,
+      rules: {
+        questLimit: row!.quest_limit,
+        availableFrom: row!.available_from,
+        availableUntil: row!.available_until,
+      },
+    });
+  });
 
   router.get('/books/:id/progress', requireAuth, async (req, res) => {
     res.json(await getProgress(req.user!.id, String(req.params.id)));

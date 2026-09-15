@@ -394,95 +394,65 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                 {books.length === 0 && <p className="status-text" style={{ margin: 0 }}>No tomes assigned yet.</p>}
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                   {books.map((b) => {
-                    const current = bookCounts[b.id] ?? (b.questCount != null ? String(b.questCount) : '');
+                    const [expanded, setExpanded] = useState(false);
                     return (
-                      <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ flex: 1, minWidth: '8rem' }}>
-                          ▸ {b.title}
+                      <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <button
+                            className="pixel-btn pixel-btn--ghost"
+                            style={{ flex: 1, textAlign: 'left', textTransform: 'none', fontSize: '1rem' }}
+                            onClick={() => setExpanded(!expanded)}
+                          >
+                            {expanded ? '▾' : '▸'} {b.title}
+                          </button>
                           {b.quizMode === 'programming' && (
-                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)', marginLeft: '0.4rem' }} title="Programming mode — code-reading challenges">⌨ CODE</span>
+                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)' }} title="Programming mode">⌨</span>
                           )}
                           {b.quizMode === 'language' && (
-                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)', marginLeft: '0.4rem' }} title="Language mode — vocabulary and translation drills">🗣 LANG</span>
+                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)' }} title="Language mode">🗣</span>
                           )}
-                        </span>
-                        <select
-                          className="pixel-select"
-                          style={{ fontSize: '0.6rem' }}
-                          value={bookQuestChapters[b.id] ?? (b.questChapters != null ? String(b.questChapters) : '')}
-                          title="Chapters that become quests (1–2 = long quests; fewer also means faster generation)"
-                          onChange={(e) => setBookQuestChapters((m) => ({ ...m, [b.id]: e.target.value }))}
-                        >
-                          <option value="">AUTO</option>
-                          {QUEST_CHAPTER_CHOICES.map((c) => (
-                            <option key={c} value={c}>{c} QUEST{c === '1' ? '' : 'S'}</option>
-                          ))}
-                        </select>
-                        <button
-                          className="pixel-btn pixel-btn--ghost"
-                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
-                          disabled={!!busy}
-                          title="Apply the quest-chapter count and regenerate (1–2 = long quests per PDF)"
-                          onClick={() => void handleBookQuestChapters(b)}
-                        >
-                          ⟳
-                        </button>
-                        <select
-                          className="pixel-select"
-                          style={{ fontSize: '0.6rem' }}
-                          value={current}
-                          title="Monsters per tome (AUTO picks by length)"
-                          onChange={(e) => setBookCounts((m) => ({ ...m, [b.id]: e.target.value }))}
-                        >
-                          <option value="">AUTO</option>
-                          {QUEST_COUNT_CHOICES.map((c) => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                        <button
-                          className="pixel-btn pixel-btn--ghost"
-                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
-                          disabled={!!busy || current === (b.questCount != null ? String(b.questCount) : '')}
-                          title="Apply this count and re-summon the tome's monsters"
-                          onClick={() => void handleBookCount(b)}
-                        >
-                          ⟳ RE-SUMMON
-                        </button>
-                        <button
-                          className="pixel-btn pixel-btn--ghost"
-                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
-                          title={`Quiz mode: ${b.quizMode}. Click to toggle general ↔ programming.`}
-                          onClick={() => void handleBookMode(b)}
-                          disabled={!!busy}
-                        >
-                          {b.quizMode === 'programming' ? '⌨→📖' : '📖→⌨'}
-                        </button>
-                        <button
-                          className="pixel-btn pixel-btn--ghost"
-                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
-                          title="Review the challenges and re-summon any bad ones"
-                          onClick={() => { setReviewBook(b.id); setView('review'); }}
-                        >
-                          🔍 REVIEW
-                        </button>
-                        <button
-                          className={`pixel-btn ${b.locked ? 'pixel-btn--gold' : 'pixel-btn--ghost'}`}
-                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
-                          disabled={!!busy}
-                          title={b.locked ? 'Unlock: players see and play this tome again' : 'Lock: hide this tome from players (time-limited access)'}
-                          onClick={() => void handleBookLock(b)}
-                        >
-                          {b.locked ? '🔒 LOCKED' : '🔓 OPEN'}
-                        </button>
-                        <button
-                          className="pixel-btn pixel-btn--ghost"
-                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
-                          title="Remove this tome entirely (progress goes with it)"
-                          onClick={() => void handleBookRemove(b)}
-                          disabled={!!busy}
-                        >
-                          🗑 REMOVE
-                        </button>
+                          {b.locked && (
+                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-red)' }} title="Locked">🔒</span>
+                          )}
+                        </div>
+                        {expanded && (
+                          <div style={{ marginLeft: '1.5rem', marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center' }}>
+                            <select
+                              className="pixel-select"
+                              style={{ fontSize: '0.55rem' }}
+                              value={bookQuestChapters[b.id] ?? (b.questChapters != null ? String(b.questChapters) : '')}
+                              title="Chapters that become quests"
+                              onChange={(e) => setBookQuestChapters((m) => ({ ...m, [b.id]: e.target.value }))}
+                            >
+                              <option value="">AUTO</option>
+                              {QUEST_CHAPTER_CHOICES.map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={() => void handleBookQuestChapters(b)}>⟳</button>
+                            <select
+                              className="pixel-select"
+                              style={{ fontSize: '0.55rem' }}
+                              value={bookCounts[b.id] ?? (b.questCount != null ? String(b.questCount) : '')}
+                              title="Monsters per tome"
+                              onChange={(e) => setBookCounts((m) => ({ ...m, [b.id]: e.target.value }))}
+                            >
+                              <option value="">AUTO</option>
+                              {QUEST_COUNT_CHOICES.map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={() => void handleBookCount(b)}>⟳</button>
+                            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={() => void handleBookMode(b)} title="Toggle quiz mode">
+                              {b.quizMode === 'programming' ? '⌨→📖' : '📖→⌨'}
+                            </button>
+                            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={() => { setReviewBook(b.id); setView('review'); }}>🔍</button>
+                            <button className={`pixel-btn ${b.locked ? 'pixel-btn--gold' : 'pixel-btn--ghost'}`} style={{ fontSize: '0.5rem' }} onClick={() => void handleBookLock(b)}>
+                              {b.locked ? '🔓' : '🔒'}
+                            </button>
+                            <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem', color: 'var(--p-red)' }} onClick={() => void handleBookRemove(b)}>🗑</button>
+                          </div>
+                        )}
                       </li>
                     );
                   })}

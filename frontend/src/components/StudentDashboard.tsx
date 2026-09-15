@@ -13,6 +13,9 @@ import Leaderboard from './Leaderboard';
 import Shop from './Shop';
 import Wardrobe from './Wardrobe';
 import RoyalGate from './RoyalGate';
+import GuildChat from './GuildChat';
+import Announcements from './Announcements';
+import StreakDisplay from './StreakDisplay';
 
 interface Props {
   user: AuthUser;
@@ -65,6 +68,11 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   useEffect(() => onHudCoins((c) => setHudCoins(c)), []);
   // A fresh authoritative balance (quest payout, refetch) wins again.
   useEffect(() => { setHudCoins(null); }, [userProp.coins]);
+  // Streak data from quest completion responses
+  const [questStreak, setQuestStreak] = useState<number | undefined>();
+  const [questStreakBonus, setQuestStreakBonus] = useState<number | undefined>();
+  // Announcements unread indicator
+  const [hasUnreadAnnouncements, setHasUnreadAnnouncements] = useState(false);
 
   const refreshBooks = useCallback(async () => {
     try {
@@ -165,7 +173,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   }
 
   const onQuestComplete = useCallback(
-    async (chapterId: string, result: { rawScore: number; coinsAwarded: number; coins: number; rank: string }) => {
+    async (chapterId: string, result: { rawScore: number; coinsAwarded: number; coins: number; rank: string; streak?: number; streakBonus?: number }) => {
       // result.coins is the server-confirmed balance AFTER the transaction
       // committed — always reconcile to it rather than doing local math.
       onUserUpdated({ ...user, coins: result.coins });
@@ -174,6 +182,13 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
         setView({ name: 'map', bookId: book.id });
       }
       setNotice(`Quest complete! +${result.rawScore} points · +${result.coinsAwarded} coins · Rank: ${result.rank}`);
+      // Streak tracking
+      if (result.streak !== undefined) {
+        setQuestStreak(result.streak);
+        setQuestStreakBonus(result.streakBonus ?? 0);
+        // Reset after animation
+        setTimeout(() => { setQuestStreak(undefined); setQuestStreakBonus(undefined); }, 5000);
+      }
     },
     [book, user, onUserUpdated]
   );
@@ -206,6 +221,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
             </span>
           </span>
           {guild && <span className="label">🏰 {guild.name}</span>}
+          <StreakDisplay questStreak={questStreak} questStreakBonus={questStreakBonus} />
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {view.name !== 'home' && <button className="pixel-btn pixel-btn--ghost" onClick={() => setView({ name: 'home' })}>◀ HALL</button>}
@@ -354,6 +370,25 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
               </button>
             </div>
           </div>
+
+          {/* Guild Chat & Announcements — only for guild members */}
+          {guild && !leads && (
+            <div style={{ maxWidth: 640, margin: '1.25rem auto 0', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <Announcements
+                user={user}
+                isTeacher={false}
+                onUnreadChange={setHasUnreadAnnouncements}
+              />
+              <GuildChat user={user} isTeacher={false} />
+            </div>
+          )}
+
+          {/* Teachers see chat too */}
+          {guild && leads && (
+            <div style={{ maxWidth: 640, margin: '1.25rem auto 0' }}>
+              <GuildChat user={user} isTeacher={true} />
+            </div>
+          )}
         </>
       )}
 

@@ -2,7 +2,7 @@
 // Node-postgres with a connection pool. All schema lives in backend/migrations/*.sql
 // which are applied to Supabase via the SQL editor / CLI.
 import pg from 'pg';
-import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow } from './types.js';
+import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow, CompiledLesson } from './types.js';
 
 export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow, type CompiledLesson, type QuestBlank } from './types.js';
 
@@ -647,6 +647,221 @@ export function rankForScore(score: number): string {
     if (score >= t.minScore) rank = t.name;
   }
   return rank;
+}
+
+// --- guild chat ----------------------------------------------------------------
+
+export interface GuildMessageRow {
+  id: string;
+  guildId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  avatar: Record<string, unknown>;
+  rank: string;
+  message: string;
+  createdAt: Date;
+}
+
+/** Fetch the N most recent messages for a guild (oldest-first). */
+export async function getGuildMessages(guildId: string, limit = 50): Promise<GuildMessageRow[]> {
+  const rows = await query(
+    `SELECT gm.id, gm.guild_id, gm.user_id, u.name AS user_name, u.role AS user_role,
+            u.preferences AS avatar, gm.message, gm.created_at
+     FROM guild_messages gm
+     JOIN users u ON u.id = gm.user_id
+     WHERE gm.guild_id = $1
+     ORDER BY gm.created_at DESC
+     LIMIT $2`,
+    [guildId, limit]
+  );
+  return rows.reverse().map((r: any) => ({
+    id: r.id, guildId: r.guild_id, userId: r.user_id,
+    userName: r.user_name, userRole: r.user_role,
+    avatar: ((r.avatar as Record<string, unknown>)?.avatar ?? r.avatar ?? {}) as Record<string, unknown>,
+    rank: rankForScore(0), // will be enriched by caller if needed
+    message: r.message, createdAt: r.created_at,
+  }));
+}
+
+/** Post a message to a guild chat. Returns the new message. */
+export async function insertGuildMessage(guildId: string, userId: string, message: string): Promise<GuildMessageRow> {
+  const row = await queryOne(
+    `INSERT INTO guild_messages (guild_id, user_id, message) VALUES ($1, $2, $3) RETURNING *`,
+    [guildId, userId, message]
+  );
+  const user = await getUserById(userId);
+  return {
+    id: row!.id, guildId: row!.guild_id, userId: row!.user_id,
+    userName: user?.name ?? 'Unknown', userRole: user?.role ?? 'student',
+    avatar: ((user?.preferences as Record<string, unknown>)?.avatar ?? {}) as Record<string, unknown>,
+    rank: rankForScore(0),
+    message: row!.message, createdAt: row!.created_at,
+  };
+}
+
+/** Delete a message (teacher-only, own guild). Returns true if deleted. */
+export async function deleteGuildMessage(messageId: string, guildId: string): Promise<boolean> {
+  return (await execute(`DELETE FROM guild_messages WHERE id = $1 AND guild_id = $2`, [messageId, guildId])) > 0;
+}
+
+/** Get messages since a timestamp (for polling). */
+export async function getGuildMessagesSince(guildId: string, since: Date): Promise<GuildMessageRow[]> {
+  const rows = await query(
+    `SELECT gm.id, gm.guild_id, gm.user_id, u.name AS user_name, u.role AS user_role,
+            u.preferences AS avatar, gm.message, gm.created_at
+     FROM guild_messages gm
+     JOIN users u ON u.id = gm.user_id
+     WHERE gm.guild_id = $1 AND gm.created_at > $2
+     ORDER BY gm.created_at ASC`,
+    [guildId, since]
+  );
+  return rows.map((r: any) => ({
+    id: r.id, guildId: r.guild_id, userId: r.user_id,
+    userName: r.user_name, userRole: r.user_role,
+    avatar: ((r.avatar as Record<string, unknown>)?.avatar ?? r.avatar ?? {}) as Record<string, unknown>,
+    rank: rankForScore(0),
+    message: r.message, createdAt: r.created_at,
+  }));
+}
+
+// --- announcements --------------------------------------------------------------
+
+export interface AnnouncementRow {
+  id: string;
+  guildId: string;
+  teacherId: string;
+  teacherName: string;
+  title: string;
+  message: string;
+  createdAt: Date;
+}
+
+/** Fetch announcements for a guild (newest-first). */
+export async function getAnnouncements(guildId: string, limit = 20): Promise<AnnouncementRow[]> {
+  const rows = await query(
+    `SELECT a.id, a.guild_id, a.teacher_id, u.name AS teacher_name, a.title, a.message, a.created_at
+     FROM announcements a
+     JOIN users u ON u.id = a.teacher_id
+     WHERE a.guild_id = $1
+     ORDER BY a.created_at DESC
+     LIMIT $2`,
+    [guildId, limit]
+  );
+  return rows.map((r: any) => ({
+    id: r.id, guildId: r.guild_id, teacherId: r.teacher_id,
+    teacherName: r.teacher_name, title: r.title, message: r.message, createdAt: r.created_at,
+  }));
+}
+
+/** Create an announcement (teacher-only). */
+export async function insertAnnouncement(guildId: string, teacherId: string, title: string, message: string): Promise<AnnouncementRow> {
+  const row = await queryOne(
+    `INSERT INTO announcements (guild_id, teacher_id, title, message) VALUES ($1, $2, $3, $4) RETURNING *`,
+    [guildId, teacherId, title, message]
+  );
+  const user = await getUserById(teacherId);
+  return {
+    id: row!.id, guildId: row!.guild_id, teacherId: row!.teacher_id,
+    teacherName: user?.name ?? 'Teacher', title: row!.title, message: row!.message, createdAt: row!.created_at,
+  };
+}
+
+/** Delete an announcement (teacher-only, own guild). Returns true if deleted. */
+export async function deleteAnnouncement(announcementId: string, guildId: string): Promise<boolean> {
+  return (await execute(`DELETE FROM announcements WHERE id = $1 AND guild_id = $2`, [announcementId, guildId])) > 0;
+}
+
+/** Get the latest announcement timestamp for a guild (for unread indicator). */
+export async function getLatestAnnouncementTime(guildId: string): Promise<Date | null> {
+  const row = await queryOne<{ created_at: Date }>(
+    `SELECT created_at FROM announcements WHERE guild_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [guildId]
+  );
+  return row?.created_at ?? null;
+}
+
+// --- streaks --------------------------------------------------------------------
+
+/** Streak bonus: coins awarded every 7 consecutive days. */
+export const STREAK_BONUS_COINS = 50;
+
+export interface StreakInfo {
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: Date | null;
+}
+
+/** Get a user's streak info. */
+export async function getStreak(userId: string): Promise<StreakInfo> {
+  const row = await queryOne<{ current_streak: number; longest_streak: number; last_active_date: Date | null }>(
+    `SELECT current_streak, longest_streak, last_active_date FROM users WHERE id = $1`,
+    [userId]
+  );
+  return {
+    currentStreak: row?.current_streak ?? 0,
+    longestStreak: row?.longest_streak ?? 0,
+    lastActiveDate: row?.last_active_date ?? null,
+  };
+}
+
+/**
+ * Update streak on successful quest completion.
+ * Returns { streak, bonusAwarded } where bonusAwarded is the streak bonus coins
+ * if the 7-day milestone was reached (0 otherwise).
+ */
+export async function updateStreak(userId: string, tx?: DbExecutor): Promise<{ streak: number; bonusAwarded: number }> {
+  const exec = tx ?? { query: pool.query.bind(pool) };
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  // Get current streak state
+  const row = await exec.query<{ current_streak: number; longest_streak: number; last_active_date: Date | null }>(
+    `SELECT current_streak, longest_streak, last_active_date FROM users WHERE id = $1`,
+    [userId]
+  );
+  const current = row.rows[0];
+  if (!current) return { streak: 0, bonusAwarded: 0 };
+
+  const lastActive = current.last_active_date;
+  let newStreak = current.current_streak;
+  let bonusAwarded = 0;
+
+  if (lastActive) {
+    const lastDate = new Date(lastActive);
+    const lastDay = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate());
+
+    if (lastDay.getTime() === today.getTime()) {
+      // Already counted today — no change
+    } else if (lastDay.getTime() === yesterday.getTime()) {
+      // Consecutive day — increment
+      newStreak += 1;
+    } else if (lastDay.getTime() < yesterday.getTime()) {
+      // Missed a day — reset to 1
+      newStreak = 1;
+    }
+  } else {
+    // First activity ever
+    newStreak = 1;
+  }
+
+  // Check for 7-day milestone bonus
+  if (newStreak > 0 && newStreak % 7 === 0) {
+    bonusAwarded = STREAK_BONUS_COINS;
+  }
+
+  // Update longest streak if surpassed
+  const newLongest = Math.max(current.longest_streak, newStreak);
+
+  // Persist
+  await exec.query(
+    `UPDATE users SET current_streak = $1, longest_streak = $2, last_active_date = $3 WHERE id = $4`,
+    [newStreak, newLongest, today, userId]
+  );
+
+  return { streak: newStreak, bonusAwarded };
 }
 
 // Re-export the admin/shop/cosmetics/map data layer so route modules can pull

@@ -22,6 +22,10 @@ import {
   getChallenge, replaceChallenge, nextChallengeOrd,
   getGlobalMapConfig, getGuildMapSettings, setGuildMapTheme, applyBookRules,
   listGuildsWithCounts, removeGuildMember,
+  getGuildMessages, insertGuildMessage, deleteGuildMessage, getGuildMessagesSince,
+  getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
+  getStreak, updateStreak, STREAK_BONUS_COINS,
+  pool,
   type GuildRow, type UserRow, type ChapterRow, type BookRow,
 } from '../db/db.js';
 
@@ -74,7 +78,7 @@ export async function generateChallengesForBook(
       content = generateHeuristically(chapter, perChapterTarget(target, chapters.length));
     }
     for (let i = 0; i < content.challenges.length; i++) {
-      await insertChallenge({ bookId, chapterId: chapter.id, ...content.challenges[i], ord: i });
+      await insertChallenge({ bookId, chapterId: chapter.id, ...content.challenges[i], ord: i, quest: null });
     }
     generated += content.challenges.length;
   }
@@ -457,6 +461,168 @@ export function createApiRouter(): Router {
     res.json({ term, settings, guildId: guild?.id ?? null });
   });
 
+  // --- guild chat ----------------------------------------------------------------
+  // Polling-based MVP: clients fetch new messages every few seconds.
+  // TODO: upgrade to Supabase Realtime for true push notifications.
+
+  /** Get recent messages for the user's guild. */
+  router.get('/guilds/mine/chat', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(400).json({ error: 'You must be in a guild to use chat' });
+
+    // Optional: ?since=<ISO timestamp> for polling new messages only
+    const sinceStr = typeof req.query.since === 'string' ? req.query.since : null;
+    const since = sinceStr ? new Date(sinceStr) : null;
+
+    const messages = since
+      ? await getGuildMessagesSince(guild.id, since)
+      : await getGuildMessages(guild.id, 50);
+
+    // Enrich with ranks
+    const enriched = await Promise.all(messages.map(async (m) => {
+      const termScore = await getTermScore(m.userId, null);
+      return { ...m, rank: rankForScore(termScore) };
+    }));
+
+    res.json({ messages: enriched });
+  });
+
+  /** Post a message to the guild chat. */
+  router.post('/guilds/mine/chat', requireAuth, async (req, res) => {
+    try {
+      const user = await getUserById(req.user!.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      const guild = await resolveUserGuild(user);
+      if (!guild) return res.status(400).json({ error: 'You must be in a guild to use chat' });
+
+      const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      if (message.length === 0) return res.status(400).json({ error: 'Message cannot be empty' });
+      if (message.length > 1000) return res.status(400).json({ error: 'Message too long (max 1000 characters)' });
+
+      const newMsg = await insertGuildMessage(guild.id, user.id, message);
+      const termScore = await getTermScore(user.id, null);
+      res.status(201).json({ message: { ...newMsg, rank: rankForScore(termScore) } });
+    } catch (e: any) {
+      console.error('[postChat]', e);
+      res.status(500).json({ error: 'Could not send message' });
+    }
+  });
+
+  /** Delete a message (teacher-only, own guild). */
+  router.delete('/guilds/mine/chat/:messageId', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(400).json({ error: 'You must be in a guild' });
+
+    // Only teachers (guild owner) can delete messages
+    if (user.role !== 'teacher' && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only teachers can moderate chat' });
+    }
+
+    const deleted = await deleteGuildMessage(String(req.params.messageId), guild.id);
+    if (!deleted) return res.status(404).json({ error: 'Message not found' });
+    res.json({ ok: true });
+  });
+
+  // --- announcements --------------------------------------------------------------
+  // One-way broadcast: teachers post, students view.
+
+  /** Get announcements for the user's guild (newest-first). */
+  router.get('/guilds/mine/announcements', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.json({ announcements: [] });
+
+    const announcements = await getAnnouncements(guild.id);
+    res.json({ announcements });
+  });
+
+  /** Create an announcement (teacher-only). */
+  router.post('/guilds/mine/announcements', requireAuth, async (req, res) => {
+    try {
+      const user = await getUserById(req.user!.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      if (user.role !== 'teacher' && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Only teachers can post announcements' });
+      }
+      const guild = await resolveUserGuild(user);
+      if (!guild) return res.status(400).json({ error: 'You must lead a guild to post announcements' });
+
+      const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+      const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      if (title.length === 0) return res.status(400).json({ error: 'Title required' });
+      if (title.length > 200) return res.status(400).json({ error: 'Title too long (max 200 characters)' });
+      if (message.length === 0) return res.status(400).json({ error: 'Message required' });
+      if (message.length > 2000) return res.status(400).json({ error: 'Message too long (max 2000 characters)' });
+
+      const announcement = await insertAnnouncement(guild.id, user.id, title, message);
+      res.status(201).json({ announcement });
+    } catch (e: any) {
+      console.error('[postAnnouncement]', e);
+      res.status(500).json({ error: 'Could not post announcement' });
+    }
+  });
+
+  /** Delete an announcement (teacher-only, own guild). */
+  router.delete('/guilds/mine/announcements/:id', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role !== 'teacher' && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only teachers can delete announcements' });
+    }
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(400).json({ error: 'You must lead a guild' });
+
+    const deleted = await deleteAnnouncement(String(req.params.id), guild.id);
+    if (!deleted) return res.status(404).json({ error: 'Announcement not found' });
+    res.json({ ok: true });
+  });
+
+  /** Check for unread announcements (student dashboard unread indicator). */
+  router.get('/guilds/mine/announcements/unread', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.json({ hasUnread: false });
+
+    // Get user's last seen timestamp from preferences
+    const prefs = user.preferences as Record<string, unknown> | null;
+    const lastSeenStr = prefs?.lastAnnouncementSeen as string | undefined;
+    const lastSeen = lastSeenStr ? new Date(lastSeenStr) : null;
+
+    const latest = await getLatestAnnouncementTime(guild.id);
+    const hasUnread = latest ? (!lastSeen || latest > lastSeen) : false;
+
+    res.json({ hasUnread, latestAnnouncementAt: latest?.toISOString() ?? null });
+  });
+
+  /** Mark announcements as seen (student viewed them). */
+  router.post('/guilds/mine/announcements/seen', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // Update preferences with current timestamp
+    const prefs = (user.preferences as Record<string, unknown>) ?? {};
+    prefs.lastAnnouncementSeen = new Date().toISOString();
+    await query(
+      `UPDATE users SET preferences = $1::jsonb WHERE id = $2`,
+      [JSON.stringify(prefs), user.id]
+    );
+    res.json({ ok: true });
+  });
+
+  // --- streaks --------------------------------------------------------------------
+
+  /** Get the user's current streak info. */
+  router.get('/me/streak', requireAuth, async (req, res) => {
+    const streak = await getStreak(req.user!.id);
+    res.json(streak);
+  });
+
   // --- upload & parse a PDF (owner-scoped) ---------------------------------------
 
   router.post('/upload', requireAuth, upload.single('pdf'), async (req, res) => {
@@ -813,7 +979,7 @@ export function createApiRouter(): Router {
     if (!fresh) return res.status(500).json({ error: 'Could not generate a replacement challenge' });
 
     const ord = await nextChallengeOrd(chapter.id);
-    await replaceChallenge(challenge.id, { ...fresh, bookId: chapter.bookId, chapterId: chapter.id, ord });
+    await replaceChallenge(challenge.id, { ...fresh, bookId: chapter.bookId, chapterId: chapter.id, ord, quest: null });
     const updated = await getChallenge(challenge.id);
     res.json({ challenge: updated });
   });
@@ -937,7 +1103,7 @@ export function createApiRouter(): Router {
       coinsAwarded = 0;
     }
 
-    const { scoreRow, newCoins } = await withTransaction(async (tx) => {
+    const { scoreRow, newCoins: baseCoins } = await withTransaction(async (tx) => {
       const scoreRow = await insertScoreTx(tx, {
         userId: user.id, chapterId: chapter.id, rawScore: scaled, mistakes: opts.mistakes,
         timeSeconds: opts.timeSeconds, finished: opts.finished, livesRemaining: opts.livesRemaining,
@@ -958,14 +1124,31 @@ export function createApiRouter(): Router {
       });
       return { scoreRow, newCoins };
     });
+    let finalCoins = baseCoins;
 
     // Fail-event log (score, gathered, penalty, net) — feed for a future
     // teacher guild-roster report.
     console.log('[questSettle]', JSON.stringify({
       userId: user.id, chapterId: chapter.id, term: opts.term,
       outcome: opts.failReason ?? 'completed', score: scaled,
-      coinsGathered: opts.coinsGathered, coinsPenalty, netCoins, balance: newCoins,
+      coinsGathered: opts.coinsGathered, coinsPenalty, netCoins, balance: baseCoins,
     }));
+
+    // Streak tracking: only on successful quest completion
+    let streakBonus = 0;
+    let currentStreak = 0;
+    if (opts.failReason === null) {
+      const streakResult = await updateStreak(user.id);
+      streakBonus = streakResult.bonusAwarded;
+      currentStreak = streakResult.streak;
+      if (streakBonus > 0) {
+        // Award streak bonus coins within the same transaction context
+        const bonusCoins = await applyCoinsTx({ query: pool.query.bind(pool) }, user.id, streakBonus);
+        console.log('[streakBonus]', JSON.stringify({ userId: user.id, streak: currentStreak, bonus: streakBonus, newBalance: bonusCoins }));
+        // Update the returned coins to include the streak bonus
+        finalCoins = bonusCoins;
+      }
+    }
 
     return {
       scoreId: scoreRow.id,
@@ -973,10 +1156,12 @@ export function createApiRouter(): Router {
       coinsAwarded,
       coinsPenalty,
       netCoins,
-      coins: newCoins,
+      coins: finalCoins,
       breakdown: result.breakdown,
       rank: rankForScore(await getTermScore(user.id, opts.term)),
       term: opts.term,
+      streak: currentStreak,
+      streakBonus,
     };
   }
 
@@ -1012,6 +1197,8 @@ export function createApiRouter(): Router {
         breakdown: r.breakdown,
         rank: r.rank,
         term: r.term,
+        streak: r.streak,
+        streakBonus: r.streakBonus,
       });
     } catch (e: any) {
       console.error('[questComplete]', e);

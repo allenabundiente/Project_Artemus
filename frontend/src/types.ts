@@ -33,9 +33,6 @@ export interface BookMeta {
   createdAt: string;
   /** Teacher-set quest cap; null/undefined = unlimited. */
   questLimit?: number | null;
-  /** Availability window (ISO strings); null/undefined = always available. */
-  availableFrom?: string | null;
-  availableUntil?: string | null;
 }
 
 export interface ChapterMeta {
@@ -305,4 +302,8 @@ export interface ScoreResultResponse {
   breakdown: { label: string; value: number }[];
   rank: RankName | string;
   term: string;
+  /** Current streak (successful quests only). */
+  streak?: number;
+  /** Streak bonus coins if 7-day milestone reached (0 otherwise). */
+  streakBonus?: number;
 }

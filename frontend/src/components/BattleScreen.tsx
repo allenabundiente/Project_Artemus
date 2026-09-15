@@ -29,7 +29,12 @@ interface Props {
   onVictory: () => void;
 }
 
-export default function BattleScreen({ queue, maxHp, lives, boss = false, onDamage, onHit, onRetreat, onVictory }: Props) {
+export default function BattleScreen({ queue, maxHp, lives, boss = false, onDamage, onHit, onRetreat, onVictory, monsterSlot }: Props) {
+  // A theme's roster can swap the classic goblin for any sprite slot — but
+  // only if that slot actually rendered on the map (PNG exists on disk).
+  // Otherwise fall back to the classic monster art so battles never show a
+  // phantom slot.
+  const art = monsterSlot && spriteLoads(monsterSlot) ? monsterSlot : 'enemy_goblin';
   const [monsterHp, setMonsterHp] = useState(maxHp);
   const [qIndex, setQIndex] = useState(0);
   /** Remount counter: a fresh attempt at the same question after a wrong answer. */
@@ -165,6 +170,13 @@ export default function BattleScreen({ queue, maxHp, lives, boss = false, onDama
       )}
     </div>
   );
+}
+
+/** True once the given slot's PNG is confirmed present on the server. */
+function spriteLoads(slot: string): boolean {
+  const probe = new Image();
+  probe.src = `/sprites/${slot}.png`;
+  return probe.complete && probe.naturalWidth > 0;
 }
 
 

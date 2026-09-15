@@ -464,3 +464,85 @@ export async function createShopItem(item: Omit<ShopItem, 'id'>): Promise<ShopIt
 export async function deleteShopItem(id: string): Promise<{ ok: boolean }> {
   return send(`/api/admin/shop/${id}`, 'DELETE');
 }
+
+// --- guild chat ------------------------------------------------------------------
+// Polling-based MVP: clients poll every few seconds for new messages.
+// TODO: upgrade to Supabase Realtime for true push notifications.
+
+export interface ChatMessage {
+  id: string;
+  guildId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  avatar: Record<string, unknown>;
+  rank: string;
+  message: string;
+  createdAt: string;
+}
+
+/** Fetch recent guild messages. Pass `since` ISO string for polling new-only. */
+export async function getGuildChat(since?: string): Promise<{ messages: ChatMessage[] }> {
+  const params = since ? `?since=${encodeURIComponent(since)}` : '';
+  return get(`/api/guilds/mine/chat${params}`);
+}
+
+/** Post a message to guild chat. */
+export async function postGuildChat(message: string): Promise<{ message: ChatMessage }> {
+  return send('/api/guilds/mine/chat', 'POST', { message });
+}
+
+/** Delete a message (teacher-only). */
+export async function deleteGuildChatMessage(messageId: string): Promise<{ ok: boolean }> {
+  return send(`/api/guilds/mine/chat/${messageId}`, 'DELETE');
+}
+
+// --- announcements ---------------------------------------------------------------
+
+export interface Announcement {
+  id: string;
+  guildId: string;
+  teacherId: string;
+  teacherName: string;
+  title: string;
+  message: string;
+  createdAt: string;
+}
+
+/** Fetch announcements for the user's guild. */
+export async function getAnnouncements(): Promise<{ announcements: Announcement[] }> {
+  return get('/api/guilds/mine/announcements');
+}
+
+/** Create an announcement (teacher-only). */
+export async function postAnnouncement(title: string, message: string): Promise<{ announcement: Announcement }> {
+  return send('/api/guilds/mine/announcements', 'POST', { title, message });
+}
+
+/** Delete an announcement (teacher-only). */
+export async function deleteAnnouncement(id: string): Promise<{ ok: boolean }> {
+  return send(`/api/guilds/mine/announcements/${id}`, 'DELETE');
+}
+
+/** Check for unread announcements. */
+export async function getUnreadAnnouncements(): Promise<{ hasUnread: boolean; latestAnnouncementAt: string | null }> {
+  return get('/api/guilds/mine/announcements/unread');
+}
+
+/** Mark announcements as seen. */
+export async function markAnnouncementsSeen(): Promise<{ ok: boolean }> {
+  return send('/api/guilds/mine/announcements/seen', 'POST');
+}
+
+// --- streaks ---------------------------------------------------------------------
+
+export interface StreakInfo {
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: string | null;
+}
+
+/** Get the user's current streak info. */
+export async function getStreak(): Promise<StreakInfo> {
+  return get('/api/me/streak');
+}

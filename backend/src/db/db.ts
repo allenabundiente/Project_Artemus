@@ -6,7 +6,7 @@ import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow } from './types.j
 
 export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow, type CompiledLesson, type QuestBlank } from './types.js';
 
-const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/codebook_arcade';
+const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/questbook';
 
 export const pool = new pg.Pool({
   connectionString,
@@ -41,6 +41,12 @@ export function initDbResilient(): void {
 export async function query<T extends pg.QueryResultRow>(sql: string, params: unknown[] = []): Promise<T[]> {
   const res = await pool.query<T>(sql, params);
   return res.rows;
+}
+
+/** Run a write statement (INSERT/UPDATE/DELETE) and return the affected row count. */
+export async function execute(sql: string, params: unknown[] = []): Promise<number> {
+  const res = await pool.query(sql, params);
+  return res.rowCount ?? 0;
 }
 
 /**
@@ -82,29 +88,56 @@ export async function queryOne<T extends pg.QueryResultRow>(sql: string, params:
 
 // --- row mappers (snake_case DB → camelCase TS) -----------------------------
 
+export type QuizMode = 'general' | 'programming' | 'language';
+
 export interface BookRow {
   id: string;
   title: string;
   filename: string;
   ownerId: string | null;
   guildId: string | null;
-  /** Teacher-set cap on playable chapters (quests); null = no cap. */
-  questLimit: number | null;
-  /** Availability window (teacher-scheduled); null = always available. */
+  /** Teacher-chosen challenges per chapter for THIS book (null = auto). */
+  questCount: number | null;
+  /** 'general' (any subject) or 'programming' (code-flavored questions). */
+  quizMode: QuizMode;
+  /** Teacher take-down: hidden from players and locked for play. */
+  locked: boolean;
+  /** Optional availability window — null means unbounded on that side. */
   availableFrom: Date | null;
   availableUntil: Date | null;
+  /** How many chapters become playable quests (null = auto, up to 12). */
+  questChapters: number | null;
+  /** Teacher-set cap on playable chapters (quests); null = no cap. */
+  questLimit: number | null;
   createdAt: Date;
 }
 
 function mapBook(r: any): BookRow {
   return {
-    id: r.id, title: r.title, filename: r.filename,
-    ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null,
-    questLimit: r.quest_limit ?? null,
+    id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null,
+    questCount: r.quest_count ?? null,
+    quizMode: ['programming', 'language'].includes(r.quiz_mode) ? r.quiz_mode : 'general',
+    locked: r.locked ?? false,
     availableFrom: r.available_from ? new Date(r.available_from) : null,
     availableUntil: r.available_until ? new Date(r.available_until) : null,
+    questChapters: r.quest_chapters ?? null,
+    questLimit: r.quest_limit ?? null,
     createdAt: r.created_at,
   };
+}
+
+/**
+ * Is the book playable right now for a student? Locked books are out of play
+ * entirely; the availability window bounds the rest (either side optional).
+ * Teachers/admins bypass the gate (they manage the book, and preview it).
+ */
+export function isBookPlayable(book: {
+  locked: boolean; availableFrom: Date | null; availableUntil: Date | null;
+}, now: Date = new Date()): boolean {
+  if (book.locked) return false;
+  if (book.availableFrom && now < book.availableFrom) return false;
+  if (book.availableUntil && now > book.availableUntil) return false;
+  return true;
 }
 
 export interface UserRow {
@@ -175,12 +208,44 @@ function mapScore(r: any): ScoreRow {
 
 // --- books / chapters / challenges -------------------------------------------
 
-export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null): Promise<string> {
+export async function insertBook(title: string, filename: string, ownerId: string | null, guildId: string | null, questCount: number | null = null, quizMode: QuizMode = 'general', questChapters: number | null = null): Promise<string> {
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO books (title, filename, owner_id, guild_id) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [title, filename, ownerId, guildId]
+    `INSERT INTO books (title, filename, owner_id, guild_id, quest_count, quiz_mode, quest_chapters) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [title, filename, ownerId, guildId, questCount, quizMode, questChapters]
   );
   return row!.id;
+}
+
+export async function deleteBook(bookId: string): Promise<boolean> {
+  // chapters, challenges, progress, and scores all cascade (0001 schema).
+  return (await execute(`DELETE FROM books WHERE id = $1`, [bookId])) > 0;
+}
+
+/** Set how many of the PDF's chapters become playable quests (null = auto). */
+export async function updateBookQuestChapters(bookId: string, questChapters: number | null): Promise<BookRow | null> {
+  const n = questChapters === null ? null : Math.max(1, Math.min(12, Math.round(questChapters)));
+  const row = await queryOne(`UPDATE books SET quest_chapters = $2 WHERE id = $1 RETURNING *`, [bookId, n]);
+  return row ? mapBook(row) : null;
+}
+
+/** Overwrite a book's access gate with the given (already-merged) state. */
+export async function updateBookAccess(bookId: string, access: { locked: boolean; availableFrom: Date | null; availableUntil: Date | null }): Promise<void> {
+  await query(
+    `UPDATE books SET locked = $2, available_from = $3, available_until = $4 WHERE id = $1`,
+    [bookId, access.locked, access.availableFrom, access.availableUntil],
+  );
+}
+
+/** Set (or clear) the per-book quiz mode ('general' | 'programming'). */
+export async function updateBookQuizMode(bookId: string, quizMode: QuizMode): Promise<BookRow | null> {
+  const row = await queryOne(`UPDATE books SET quiz_mode = $2 WHERE id = $1 RETURNING *`, [bookId, quizMode]);
+  return row ? mapBook(row) : null;
+}
+
+/** Set (or clear) the per-book challenge count a teacher asked for. */
+export async function updateBookQuestCount(bookId: string, questCount: number | null): Promise<BookRow | null> {
+  const row = await queryOne(`UPDATE books SET quest_count = $2 WHERE id = $1 RETURNING *`, [bookId, questCount]);
+  return row ? mapBook(row) : null;
 }
 
 export async function insertChapter(bookId: string, idx: number, title: string, text: string, codeBlocks: CodeBlock[]): Promise<string> {
@@ -281,6 +346,26 @@ export async function getChallengesForBook(bookId: string): Promise<ChallengeRow
 export async function getChallengesForChapter(chapterId: string): Promise<ChallengeRow[]> {
   const rows = await query(`SELECT * FROM challenges WHERE chapter_id = $1 ORDER BY ord`, [chapterId]);
   return rows.map(mapChallenge);
+}
+
+export async function getChallenge(id: string): Promise<ChallengeRow | null> {
+  const row = await queryOne(`SELECT * FROM challenges WHERE id = $1`, [id]);
+  return row ? mapChallenge(row) : null;
+}
+
+/** Replace one challenge in place (same id, chapter, and ord) — review/regenerate. */
+export async function replaceChallenge(id: string, c: Omit<ChallengeRow, 'id'>): Promise<void> {
+  await query(
+    `UPDATE challenges SET type = $2, prompt = $3, code = $4, options = $5::jsonb, correct_answer = $6, explanation = $7, difficulty = $8, ord = $9
+     WHERE id = $1`,
+    [id, c.type, c.prompt, c.code, c.options ? JSON.stringify(c.options) : null, c.correctAnswer, c.explanation, c.difficulty, c.ord]
+  );
+}
+
+/** Max ord currently used in a chapter (for appending regenerated challenges). */
+export async function nextChallengeOrd(chapterId: string): Promise<number> {
+  const row = await queryOne<{ n: number | null }>(`SELECT MAX(ord) AS n FROM challenges WHERE chapter_id = $1`, [chapterId]);
+  return (row?.n ?? -1) + 1;
 }
 
 export async function getChapterWithText(chapterId: string): Promise<ChapterRow | null> {
@@ -449,6 +534,25 @@ export async function leaveGuild(userId: string): Promise<UserRow> {
 export async function listGuildMembers(guildId: string): Promise<UserRow[]> {
   const rows = await query(`SELECT * FROM users WHERE guild_id = $1 AND role = 'student' ORDER BY created_at`, [guildId]);
   return rows.map(mapUser);
+}
+
+/** Every guild with its member count — the admin panel's guild directory. */
+export async function listGuildsWithCounts(): Promise<(GuildRow & { memberCount: number })[]> {
+  const rows = await query(
+    `SELECT g.*, COUNT(u.id)::int AS member_count
+     FROM guilds g LEFT JOIN users u ON u.guild_id = g.id AND u.role = 'student'
+     GROUP BY g.id ORDER BY g.created_at`,
+  );
+  return rows.map((r) => ({ ...mapGuild(r), memberCount: Number(r.member_count) }));
+}
+
+/**
+ * Remove a member from their guild (teacher kicking a student, or an admin
+ * managing any guild). Idempotent: clearing a non-member's guild_id is a no-op.
+ */
+export async function removeGuildMember(userId: string): Promise<UserRow> {
+  const row = await queryOne(`UPDATE users SET guild_id = NULL WHERE id = $1 RETURNING *`, [userId]);
+  return mapUser(row);
 }
 
 // --- scores ---------------------------------------------------------------------

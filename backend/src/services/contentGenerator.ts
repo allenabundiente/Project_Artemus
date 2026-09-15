@@ -1,7 +1,11 @@
 import { callLlm, LlmError } from './llmClient.js';
 import type { ChapterRow, CodeBlock } from '../db/types.js';
+import { initPlugins, resolvePluginFor, pluginById, promptDirectiveFor, validateWithPlugin } from '../plugins/index.js';
+import type { QuizMode } from '../plugins/types.js';
 
-export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank';
+export type { QuizMode } from '../plugins/types.js';
+
+export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
 
 export interface GeneratedChallenge {
   type: ChallengeType;
@@ -23,12 +27,68 @@ export interface GenerationOptions {
   term?: string;
   monsterDifficulty?: 'easy' | 'medium' | 'hard';
   difficultyMix?: { easy: number; medium: number; hard: number };
+  /** Teacher-chosen challenge count for THIS book (null/undefined = auto). */
+  targetCount?: number | null;
+  /** 'general' (default, any subject) or 'programming' (code-flavored). */
+  quizMode?: QuizMode;
 }
 
-const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank']);
+/** Default batch size when no teacher count is set (per chapter). */
+const DEFAULT_CHALLENGES_PER_CHAPTER = 12;
+
+/**
+ * Decide a book's quiz mode via the PLUGIN registry: explicit teacher choice
+ * wins; otherwise the first enabled plugin whose detect() matches the filename
+ * claims it (the `_code.pdf` convention is just the `programming` plugin's
+ * rule). Unmatched uploads fall back to `general`.
+ */
+export function detectQuizMode(filename: string, explicit?: unknown): QuizMode {
+  if (explicit === 'programming' || explicit === 'general' || explicit === 'language') return explicit;
+  initPlugins();
+  // The claiming plugin's id IS the mode; anything unknown falls back to general.
+  const plugin = resolvePluginFor(filename, filename.replace(/\.pdf$/i, ''));
+  return (['programming', 'language'].includes(plugin.id) ? plugin.id : 'general') as QuizMode;
+}
+
+/** Clamp a teacher-chosen target into the supported range. */
+export function clampTargetCount(n: unknown): number | null {
+  if (n === null || n === undefined || n === '') return null; // auto
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v) || v < 1) return null;
+  return Math.min(v, 500);
+}
+
+/**
+ * How many challenges one chapter should aim for, given the book-wide target.
+ * The per-book count is split evenly across the book's chapters (at least 1
+ * each); oversized leftovers from validation land back in the book total.
+ */
+export function perChapterTarget(targetCount: number | null | undefined, chapterCount: number): number {
+  if (!targetCount || targetCount < 1 || chapterCount < 1) return DEFAULT_CHALLENGES_PER_CHAPTER;
+  return Math.max(1, Math.ceil(targetCount / chapterCount));
+}
+
+function countDirective(target: number | undefined): string {
+  if (target && target !== DEFAULT_CHALLENGES_PER_CHAPTER) {
+    return `- Generate EXACTLY ${target} challenges for this chapter (the teacher chose this amount).`;
+  }
+  return '- Generate between 10 and 15 challenges per chapter, ordered easy to hard.';
+}
+
+/**
+ * Mode → plugin. The directive text itself lives in the plugins
+ * (promptDirective); this only resolves which plugin to ask. An explicit
+ * teacher-chosen mode maps by id, bypassing filename detection.
+ */
+function pluginForMode(mode: QuizMode | undefined) {
+  initPlugins();
+  return pluginById(mode === 'programming' ? 'programming' : 'general');
+}
+
+const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank', 'true_false', 'short_answer']);
 const VALID_DIFFICULTY = new Set(['easy', 'medium', 'hard']);
 
-const SYSTEM_PROMPT = `You are the content engine for "CodeBook Arcade", a retro arcade game that teaches programming from real textbook material.
+const SYSTEM_PROMPT = `You are the content engine for "QuestBook", a retro arcade game that teaches real material from uploaded books and documents.
 
 Your job: take a chapter of a programming book and turn its actual content into game challenges. Ground EVERY challenge in the text or code you are given. Never invent concepts, syntax, or APIs that are not present in the source material.
 
@@ -39,17 +99,20 @@ Rules:
   "concept": "string — the single core concept this chapter teaches",
   "challenges": [
     {
-      "type": "multiple_choice | predict_output | spot_the_bug | fill_in_blank",
+      "type": "multiple_choice | predict_output | spot_the_bug | fill_in_blank | true_false | short_answer",
       "prompt": "string — the question, written like a game prompt",
       "code": "string or null — required for predict_output and spot_the_bug; optional for others",
-      "options": ["4 strings — REQUIRED for multiple_choice and predict_output, null otherwise; exactly one must be correct"],
+      "options": ["4 strings — REQUIRED for multiple_choice, predict_output and true_false, null otherwise; exactly one must be correct. For true_false exactly two: \"True\" and \"False\"."],
       "correctAnswer": "string — must match one of options exactly when options are present",
       "explanation": "string — 1-2 sentences that teach, tied to the book's own wording",
       "difficulty": "easy | medium | hard"
     }
   ]
 }
-- Generate 3-5 challenges per chapter, ordered easy to hard.
+- {{CHALLENGE_COUNT}}
+- Mix at least three DIFFERENT types per batch. Use true_false for subtly-wrong statements (flip one detail: a number, an operator, a cause/effect), short_answer for "in your own words" recall of definitions, and fill_in_blank for exact term recall.
+- Distractors must be PLAUSIBLE and drawn from adjacent concepts in this same text (near-miss values, similar-sounding terms, common misconceptions) — never random noise and never "all of the above".
+- Vary the angle on each challenge: every prompt must be recognizably DIFFERENT from the others (different snippet, different blank, different distractor set) — never paraphrase the same question twice.
 - Mix types. Use the book's real code snippets — do not rewrite them except to introduce one deliberate bug for spot_the_bug.
 - Keep code snippets short (under 15 lines).`;
 
@@ -126,11 +189,16 @@ function validateGenerated(raw: any): ChapterContent {
     let options: string[] | null = null;
     let correctAnswer = typeof c.correctAnswer === 'string' ? c.correctAnswer.trim() : '';
 
-    if (type === 'multiple_choice' || type === 'predict_output') {
+    if (type === 'multiple_choice' || type === 'predict_output' || type === 'true_false') {
       if (!Array.isArray(c.options) || c.options.length < 2) continue;
       options = (c.options as unknown[]).filter((o): o is string => typeof o === 'string' && o.trim().length > 0).map((o) => o.trim());
       if (options.length < 2) continue;
-      if (!options.includes(correctAnswer)) {
+      if (type === 'true_false') {
+        // Normalize to the canonical True/False pair.
+        options = ['True', 'False'];
+        correctAnswer = /^t(rue)?$/i.test(correctAnswer) ? 'True' : /^f(alse)?$/i.test(correctAnswer) ? 'False' : '';
+        if (!correctAnswer) continue;
+      } else if (!options.includes(correctAnswer)) {
         // Try to find the correct answer among options if the model echoed it differently
         const match = options.find((o) => o.toLowerCase() === correctAnswer.toLowerCase());
         if (match) correctAnswer = match;
@@ -167,6 +235,18 @@ function difficultyDirective(opts: GenerationOptions | undefined): string {
 
 /** Generate challenges for a chapter using the LLM. Retries once on malformed JSON. */
 export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOptions): Promise<ChapterContent> {
+  initPlugins();
+  const plugin = pluginForMode(opts?.quizMode);
+  const pluginCtx = {
+    chapter,
+    targetCount: opts?.targetCount ?? null,
+    perChapterTarget: perChapterTarget(opts?.targetCount ?? null, 1),
+    difficulty: { monsterDifficulty: opts?.monsterDifficulty, difficultyMix: opts?.difficultyMix },
+    term: opts?.term,
+  };
+  const systemPrompt =
+    SYSTEM_PROMPT.replace('{{CHALLENGE_COUNT}}', countDirective(opts?.targetCount ?? undefined)) +
+    promptDirectiveFor(plugin, pluginCtx);
   // Keep the prompt lean: every token must be prefilled, which is the dominant
   // cost on CPU-only inference (local Ollama). ~6k chars of text + a few code
   // blocks is plenty for grounded challenges.
@@ -184,7 +264,9 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const raw = await callLlm(SYSTEM_PROMPT, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt, 2000);
+      // 10–15 challenges of validated JSON needs more room than the old 2000
+      // cap, or truncation eats half the batch on smaller models.
+      const raw = await callLlm(systemPrompt, attempt === 1 ? userPrompt + '\n\nIMPORTANT: Return ONLY the raw JSON object, nothing else.' : userPrompt, 6000);
       const json = extractJson(raw);
       let parsed: unknown;
       try {
@@ -192,7 +274,15 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
       } catch {
         parsed = JSON.parse(repairJson(json)); // small models emit near-JSON
       }
-      return validateGenerated(parsed);
+      const content = validateGenerated(parsed);
+      // Plugin-level validation: each mode may veto/repair challenges that
+      // don't fit it (e.g. code questions without code). Keep at least the
+      // core-validated survivors; fall back to the unfiltered set if a strict
+      // plugin rejects everything.
+      const filtered = content.challenges
+        .map((c) => validateWithPlugin(plugin, c, pluginCtx))
+        .filter((c): c is NonNullable<typeof c> => c !== null);
+      return filtered.length > 0 ? { concept: content.concept, challenges: filtered } : content;
     } catch (e) {
       lastErr = e as Error;
     }
@@ -204,12 +294,14 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
 // Offline heuristic fallback — deterministic, no API key needed.
 // ---------------------------------------------------------------------------
 
-export function generateHeuristically(chapter: ChapterRow): ChapterContent {
+export function generateHeuristically(chapter: ChapterRow, targetCount?: number | null): ChapterContent {
   const challenges: GeneratedChallenge[] = [];
 
   // 1) Definition sentences → fill_in_blank + multiple_choice
+  // A quest run needs a challenge for every monster heart — build a deeper
+  // bench than before so runs don't have to recycle questions.
   const defs = extractDefinitions(chapter.text);
-  for (const d of defs.slice(0, 2)) {
+  for (const d of defs.slice(0, 6)) {
     challenges.push({
       type: 'fill_in_blank',
       prompt: `Complete the sentence from the book: "${d.text.replace(d.term, '______')}"`,
@@ -220,10 +312,15 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
       difficulty: 'easy',
     });
   }
-  if (defs.length >= 2) {
-    const d = defs[0];
+  // One MC per definition pair (bounded so tiny chapters stay sane).
+  for (let i = 0; i + 1 < defs.length && i < 4; i++) {
+    const d = defs[i];
     const term = stripArticle(d.term);
-    const distractors = defs.slice(1, 4).map((x) => stripArticle(x.term)).filter((t) => t && t !== term);
+    // Distractors: other defined terms (never the current one).
+    const distractors = defs
+      .filter((x, j) => j !== i)
+      .map((x) => stripArticle(x.term))
+      .filter((t) => t && t !== term);
     if (term && distractors.length >= 2) {
       const options = shuffle([term, ...distractors.slice(0, 3)]);
       challenges.push({
@@ -238,8 +335,56 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
     }
   }
 
+  // 1b) true_false — assert the book's sentence, or swap in a WRONG term from
+  // the same chapter so the statement is subtly (not absurdly) false.
+  const swapPool = defs.map((d) => stripArticle(d.term)).filter(Boolean);
+  for (let i = 0; i < defs.length && challenges.filter((c) => c.type === 'true_false').length < 4; i++) {
+    const d = defs[i];
+    const term = stripArticle(d.term);
+    if (!term) continue;
+    const makeFalse = i % 2 === 1 && swapPool.length >= 2;
+    if (makeFalse) {
+      const wrong = swapPool.find((t) => t !== term);
+      if (!wrong) continue;
+      challenges.push({
+        type: 'true_false',
+        prompt: `True or false, per the book: "${d.text.replace(d.term, wrong)}"`,
+        code: null,
+        options: ['True', 'False'],
+        correctAnswer: 'False',
+        explanation: `False — the book says: "${d.text}". "${wrong}" was swapped in where "${term}" belongs.`,
+        difficulty: 'easy',
+      });
+    } else {
+      challenges.push({
+        type: 'true_false',
+        prompt: `True or false, per the book: "${d.text}"`,
+        code: null,
+        options: ['True', 'False'],
+        correctAnswer: 'True',
+        explanation: `True — this is stated directly in the book.`,
+        difficulty: 'easy',
+      });
+    }
+  }
+
+  // 1c) short_answer — name-the-term recall with lenient manual-style checking.
+  for (const d of defs.slice(0, 3)) {
+    const term = stripArticle(d.term);
+    if (!term) continue;
+    challenges.push({
+      type: 'short_answer',
+      prompt: `In one word or short phrase: what does the book call "${d.text.replace(term, '…').split(/\s+(?:is|are|refers to|means)\b/)[1]?.trim().slice(0, 80) ?? d.value ?? ''}"?`,
+      code: null,
+      options: null,
+      correctAnswer: term,
+      explanation: `From the book: "${d.text}" — the term is "${term}".`,
+      difficulty: 'medium',
+    });
+  }
+
   // 2) Code blocks → predict_output / spot_the_bug
-  for (const block of chapter.codeBlocks.slice(0, 4)) {
+  for (const block of chapter.codeBlocks.slice(0, 8)) {
     const lines = block.code.split('\n').filter((l) => l.trim().length > 0);
     if (lines.length < 2) continue;
 
@@ -285,12 +430,16 @@ export function generateHeuristically(chapter: ChapterRow): ChapterContent {
     });
   }
 
-  return { concept: chapter.title, challenges: challenges.slice(0, 6) };
+  // Cap the output at the teacher's target (or the heuristic bench max).
+  const cap = targetCount && targetCount > 0 ? targetCount : 20;
+  return { concept: chapter.title, challenges: challenges.slice(0, Math.max(1, cap)) };
 }
 
 interface Definition {
   term: string;
   text: string;
+  /** The defining phrase after "is/means/refers to" (for short_answer prompts). */
+  value?: string;
 }
 
 function extractDefinitions(text: string): Definition[] {
@@ -302,7 +451,11 @@ function extractDefinitions(text: string): Definition[] {
   const TERM_STOPWORDS = /^(that|which|what|who|how|why|where|when|there|this|it|they|you|we|if|but|and|or|so|then|in|on|at|to|for|with|by|from|as|an?|the)$/i;
   let m: RegExpExecArray | null;
   while ((m = re.exec(clean)) !== null) {
-    const term = m[1].trim();
+    // "A variable is…" / "An integer is…" / "The runtime is…" — the leading
+    // article is sentence-opening grammar, not part of the term. Strip it
+    // before the filters so the most common English definitional form works.
+    const rawTerm = m[1].trim().replace(/^(?:A|An|The)\s+/, '');
+    const term = rawTerm.trim();
     const value = m[4].trim();
     // Skip garbage terms: multi-clause fragments, stopword endings, or terms
     // that are really sentence fragments from headings/questions.
@@ -315,7 +468,7 @@ function extractDefinitions(text: string): Definition[] {
     if (words.length >= 2 && words.slice(1).some((w) => /^[A-Z]/.test(w))) continue;
     if (value.length < 8 || /^[A-Z][a-z]+\s+[a-z]+\s+(that|which|who)\b/.test(value)) continue;
     if (out.some((d) => d.term === term)) continue;
-    out.push({ term, text: `${term} ${m[2]} ${m[3] ?? ''} ${value}`.replace(/\s+/g, ' ').trim() });
+    out.push({ term, text: `${term} ${m[2]} ${m[3] ?? ''} ${value}`.replace(/\s+/g, ' ').trim(), value });
   }
   return out.slice(0, 8);
 }

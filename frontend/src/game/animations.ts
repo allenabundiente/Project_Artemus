@@ -1,16 +1,16 @@
-// Runtime loading of admin-managed sprite extras:
-//   • custom frame PNGs uploaded through the admin Sprite Vault (they are not
-//     in the canonical grids, so the base loader never saw them)
-//   • named animation clips registered in the admin Animations manager,
-//     persisted to public/sprites/animations.json, e.g.
-//       [{ name: 'dragon_flap', frames: ['dragon_flap1','dragon_flap2'], fps: 8, loop: true }]
+// Admin-managed sprite animation clips + extra uploaded sprite frames.
 //
-// Animation playback lives in the engine: a monster whose sprite slot matches
-// an animation name plays that clip instead of the static PNG.
+// Clips and custom sprite PNGs are stored server-side in Postgres and served
+// through the API (GET /api/animations, GET /api/sprites/list, and
+// GET /api/sprites/<name>.png), so admin-defined art survives deploys onto
+// ephemeral filesystems. Each clip:
+//   { name, frames: ['dragon_flap1', 'dragon_flap2', ...], fps, loop }
+// The engine plays a clip on any patrol monster whose sprite slot matches the
+// clip's name (or the slot starts with it).
 
 import type { SpriteMap } from './sprites';
+import { spriteApiUrl, spriteStaticUrl, refreshSpriteVersions } from './spriteVersions';
 
-/** One registered animation clip. */
 export interface SpriteAnimation {
   name: string;
   frames: string[];
@@ -18,74 +18,91 @@ export interface SpriteAnimation {
   loop: boolean;
 }
 
-let animCache: SpriteAnimation[] | null = null;
+interface RawAnim {
+  name?: unknown;
+  frames?: unknown;
+  fps?: unknown;
+  loop?: unknown;
+}
+
+function toClips(raw: unknown): SpriteAnimation[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SpriteAnimation[] = [];
+  for (const a of raw as RawAnim[]) {
+    if (
+      typeof a?.name === 'string' &&
+      Array.isArray(a.frames) &&
+      a.frames.length > 0 &&
+      a.frames.every((f) => typeof f === 'string') &&
+      typeof a.fps === 'number' &&
+      a.fps >= 1
+    ) {
+      out.push({ name: a.name, frames: [...a.frames], fps: Math.round(a.fps), loop: a.loop !== false });
+    }
+  }
+  return out;
+}
+
+/** Fetch + validate admin animation clips. No clips / offline → no clips. */
+export async function getAnimations(): Promise<SpriteAnimation[]> {
+  try {
+    const res = await fetch('/api/animations');
+    if (res.ok) return toClips(await res.json());
+  } catch {
+    // fall through to the legacy static file
+  }
+  try {
+    // Legacy local-dev source: public/sprites/animations.json (pre-DB era).
+    const res = await fetch('/sprites/animations.json');
+    if (!res.ok) return [];
+    return toClips(await res.json());
+  } catch {
+    return []; // offline / no admin clips — static sprites are fine
+  }
+}
 
 /**
- * Fetch animations.json (admin-managed). Returns [] when absent or corrupt —
- * a missing file is the normal state for a stock checkout, never an error.
+ * Preload animation frames + custom uploaded PNGs that are not in the base
+ * manifest (best-effort): images land in `sprites` so the engine can draw
+ * them. Missing files are silently skipped — the engine falls back to the
+ * built-in grid art.
  */
-export async function getAnimations(): Promise<SpriteAnimation[]> {
-  if (animCache) return animCache;
+export async function loadExtraSprites(sprites: SpriteMap, preloaded?: SpriteAnimation[]): Promise<void> {
+  const animations = preloaded ?? (await getAnimations());
+  const wanted = [...new Set(animations.flatMap((a) => a.frames))].filter((f) => !sprites[f]);
+
+  // Custom uploads live in the DB (served from /api/sprites/:name); everything
+  // the static manifest covers was already loaded by loadSprites().
+  let custom: string[] = [];
   try {
-    const res = await fetch('/sprites/animations.json', { cache: 'no-store' });
-    if (!res.ok) {
-      animCache = [];
-      return animCache;
-    }
-    const parsed = (await res.json()) as unknown;
-    animCache = Array.isArray(parsed)
-      ? parsed.filter(
-          (a): a is SpriteAnimation =>
-            !!a && typeof (a as SpriteAnimation).name === 'string' &&
-            Array.isArray((a as SpriteAnimation).frames) &&
-            (a as SpriteAnimation).frames.length > 0,
-        )
-      : [];
+    const list = await refreshSpriteVersions();
+    if (list) custom = list.sprites.filter((n) => typeof n === 'string' && !sprites[n] && !wanted.includes(n));
   } catch {
-    animCache = [];
+    // API unreachable — skip custom preloading entirely.
   }
-  return animCache;
-}/**
- * Load any manifest-listed sprite not already in `map` (i.e. custom uploads
- * beyond the canonical grids). Missing files are skipped silently — the
- * engine falls back per-slot.
- *
- * Slots already present in `map` are RE-fetched with cache-busting: the admin
- * may have uploaded a new PNG for a canonical slot (Theme Forge sprite swap)
- * since `map` was built, and `loadSprites` never re-checks the disk.
- */
-export async function loadExtraSprites(map: SpriteMap): Promise<number> {
-  let loaded = 0;
-  try {
-    const res = await fetch('/sprites/manifest.json', { cache: 'no-store' });
-    if (!res.ok) return 0;
-    const manifest = (await res.json()) as Record<string, { width: number; height: number }>;
-    const bust = Date.now().toString(36);
-    await Promise.all(
-      Object.keys(manifest).map(
-        (slot) =>
-          new Promise<void>((resolve) => {
-            const hadSlot = Boolean(map[slot]);
-            const img = new Image();
-            img.onload = () => {
-              // Keep grid-rendered data: fallbacks (the PNG is missing on disk,
-              // so the busted fetch above must have hit an old cache entry);
-              // everything else gets the freshest bytes from the server.
-              if (hadSlot && map[slot].src.startsWith('data:')) return resolve();
-              if (map[slot] === img) return resolve();
-              map[slot] = img;
-              loaded += 1;
+
+  await Promise.all(
+    [...new Set([...wanted, ...custom])].map(
+      (name) =>
+        new Promise<void>((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            sprites[name] = img;
+            resolve();
+          };
+          img.onerror = () => {
+            // No DB copy (e.g. a legacy disk-only upload in local dev) — try
+            // the static file before giving up.
+            const alt = new Image();
+            alt.onload = () => {
+              sprites[name] = alt;
               resolve();
             };
-            img.onerror = () => resolve(); // slot stays absent; engine falls back
-            // Cache-bust only re-checks (slots already in the map); brand-new
-            // slots have no cached entry to bust.
-            img.src = hadSlot ? `/sprites/${slot}.png?${bust}` : `/sprites/${slot}.png`;
-          }),
-      ),
-    );
-  } catch {
-    /* no manifest — nothing extra to load */
-  }
-  return loaded;
+            alt.onerror = () => resolve(); // frame missing → engine falls back
+            alt.src = spriteStaticUrl(name);
+          };
+          img.src = spriteApiUrl(name);
+        }),
+    ),
+  );
 }

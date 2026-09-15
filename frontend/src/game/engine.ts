@@ -3,6 +3,7 @@ import { sfx } from './sfx';
 import { resolveTheme, type Theme } from './themes';
 import { composeAvatar, type AvatarConfig, type AvatarFrame } from './avatar';
 import type { SpriteAnimation } from './animations';
+import type { QuestPlan } from './questPlan';
 
 export const VIRTUAL_W = 320;
 export const VIRTUAL_H = 180;
@@ -15,7 +16,8 @@ export interface Monster {
   x: number;
   minX: number;
   maxX: number;
-  challenge: Challenge;
+  /** Distinct challenges dealt to this monster — one per heart (no repeats within the run). */
+  queue: Challenge[];
   hp: number;
   maxHp: number;
   index: number;
@@ -58,11 +60,13 @@ interface Particle {
 }
 
 const GRAVITY = 620; // px/s^2
-const MOVE_SPEED = 132; // px/s
-const JUMP_VEL = -225; // px/s
+// Pacing pass: brisker run, slightly floatier jump to match the higher speed,
+// faster monster patrols — the player should sweep a quest without long slogs.
+const MOVE_SPEED = 165; // px/s (was 132)
+const JUMP_VEL = -240; // px/s (was -225)
 const PLAYER_W = 12;
 const PLAYER_H = 14;
-const MONSTER_HP = 3; // correct answers needed to defeat a regular monster
+const MONSTER_PATROL_SPEED = 44; // px/s (was 30)
 
 export class ArcadeEngine {
   private canvas: HTMLCanvasElement;
@@ -115,6 +119,8 @@ export class ArcadeEngine {
   private pendingMonster: number | null = null;
 
   private keys: Set<string> = new Set();
+  /** Live touch-control state, OR-merged with keyboard input (mobile/tablet). */
+  private touch: { left: boolean; right: boolean; jump: boolean } = { left: false, right: false, jump: false };
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -191,6 +197,18 @@ export class ArcadeEngine {
 
   setPaused(p: boolean): void {
     this.paused = p;
+    // A dialog opening mid-press must not leave a held touch stuck on.
+    if (p) this.touch = { left: false, right: false, jump: false };
+  }
+
+  /** Called by the on-screen touch controls; merged with keyboard in `input`. */
+  setTouchInput(t: Partial<{ left: boolean; right: boolean; jump: boolean }>): void {
+    this.touch = { ...this.touch, ...t };
+  }
+
+  /** Clear every touch flag (e.g. when the level or a dialog unmounts them). */
+  clearTouchInput(): void {
+    this.touch = { left: false, right: false, jump: false };
   }
 
   addScore(n: number): void {
@@ -231,6 +249,17 @@ export class ArcadeEngine {
     this.cb.onStateChange({ lives: this.lives, score: this.score });
   }
 
+  /** Record one landed hit on monster i (removes a heart, persists across retreats). */
+  hitMonster(i: number): void {
+    const m = this.layout.monsters[i];
+    if (m && m.hp > 0) m.hp -= 1;
+  }
+
+  /** Current hearts of monster i (so a re-encounter resumes where it left off). */
+  getMonsterHp(i: number): number {
+    return this.layout.monsters[i]?.hp ?? 0;
+  }
+
   /** Called after the player wins a battle against monster i. */
   monsterDefeated(i: number): void {
     this.defeated.add(i);
@@ -248,6 +277,20 @@ export class ArcadeEngine {
   retreatFromBattle(): void {
     this.pendingMonster = null;
     this.px = Math.max(10, this.px - 26);
+    this.py = this.layout.groundY - PLAYER_H - 6;
+    this.vy = -140;
+    this.onGround = false;
+    this.invuln = 1.4;
+  }
+
+  /**
+   * Retreat from the BOSS: re-arm the gate (touching it re-opens the fight)
+   * and bounce the player back in front of it, with brief invulnerability.
+   */
+  retreatFromBoss(): void {
+    this.pendingMonster = null;
+    this.levelDone = false;
+    this.px = Math.max(10, this.layout.flagX - 50);
     this.py = this.layout.groundY - PLAYER_H - 6;
     this.vy = -140;
     this.onGround = false;
@@ -278,10 +321,10 @@ export class ArcadeEngine {
 
   private get input(): { left: boolean; right: boolean; jump: boolean } {
     const k = this.keys;
-    const left = k.has('ArrowLeft') || k.has('KeyA');
-    const right = k.has('ArrowRight') || k.has('KeyD');
+    const left = k.has('ArrowLeft') || k.has('KeyA') || this.touch.left;
+    const right = k.has('ArrowRight') || k.has('KeyD') || this.touch.right;
     // Jump is W only — Space is reserved for typing in the answer input.
-    const jump = k.has('KeyW') || k.has('ArrowUp');
+    const jump = k.has('KeyW') || k.has('ArrowUp') || this.touch.jump;
     return { left, right, jump };
   }
 
@@ -379,7 +422,7 @@ export class ArcadeEngine {
       for (let i = 0; i < this.layout.monsters.length; i++) {
         if (this.defeated.has(i)) continue;
         const m = this.layout.monsters[i];
-        m.x += this.bugDirs[i] * 30 * dt;
+        m.x += this.bugDirs[i] * MONSTER_PATROL_SPEED * dt;
         if (m.x < m.minX) {
           m.x = m.minX;
           this.bugDirs[i] = 1;
@@ -653,10 +696,21 @@ export class ArcadeEngine {
         my = groundTop - 16 + bob;
         this.drawSprite(slot, mx, my);
       }
-      // hp pips
+      // Remaining hearts above the monster (one heart per hit it can take).
+      // Uses the shared pixel heart sprites; falls back to flat pips if the
+      // images have not loaded yet.
+      const heartFull = this.sprites['heart'];
+      const heartEmpty = this.sprites['heart_empty'];
       for (let h = 0; h < m.maxHp; h++) {
-        c.fillStyle = h < m.hp - 0 ? th.hpFilled : th.hpEmpty;
-        c.fillRect(mx + 2 + h * 5, my - 4, 3, 2);
+        const hx = mx + 2 + h * 8;
+        const hy = my - 10;
+        const img = h < m.hp ? heartFull : heartEmpty;
+        if (img && img.complete) {
+          c.drawImage(img, hx, hy, 7, 6);
+        } else {
+          c.fillStyle = h < m.hp ? th.hpFilled : th.hpEmpty;
+          c.fillRect(hx, hy + 2, 6, 3);
+        }
       }
     }
 
@@ -765,15 +819,19 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-export function buildLayout(chapterId: string, challenges: Challenge[]): LevelLayout {
+export function buildLayout(chapterId: string, plan: QuestPlan): LevelLayout {
   // Hash the uuid chapterId into a 31-bit seed for deterministic layouts.
   let h = 0;
   for (let i = 0; i < chapterId.length; i++) {
     h = (Math.imul(31, h) + chapterId.charCodeAt(i)) | 0;
   }
   const rnd = mulberry32(Math.abs(h) + 13);
-  const n = challenges.length;
-  const width = 1300 + n * 420;
+  // Pacing pass: encounters sit closer together than the old 420px gap so
+  // there is less downtime walking between monsters.
+  const SPACING = 320;
+  const queues = plan.monsterQueues;
+  const n = queues.length;
+  const width = 1100 + n * SPACING;
   const groundY = 150;
   const groundH = 30;
   const monsters: Monster[] = [];
@@ -782,15 +840,16 @@ export function buildLayout(chapterId: string, challenges: Challenge[]): LevelLa
 
   const monsterXs: number[] = [];
   for (let i = 0; i < n; i++) {
-    const x = Math.round(300 + i * 420 + rnd() * 110);
+    const x = Math.round(300 + i * SPACING + rnd() * 110);
     monsterXs.push(x);
+    const queue = queues[i];
     monsters.push({
       x,
       minX: x - 70,
       maxX: x + 70,
-      challenge: challenges[i],
-      hp: MONSTER_HP,
-      maxHp: MONSTER_HP,
+      queue,
+      hp: queue.length,
+      maxHp: queue.length,
       index: i,
     });
   }

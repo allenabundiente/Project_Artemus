@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
 import type { AuthUser, ShopItem } from '../types';
 import { spriteDataUrl } from '../game/sprites';
 import { composeAvatar, type AvatarConfig, type AvatarFrame } from '../game/avatar';
+import { celebratePurchase } from '../game/celebrate';
+import { onHudCoins } from '../game/hudCoins';
 
 interface Props {
   user: AuthUser;
@@ -52,6 +54,9 @@ export default function Shop({ user, onUserUpdated }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Celebrations must not re-fire when refresh() re-renders the list — gate on
+  // the exact server-confirmed purchase that just happened (itemId+price+coins).
+  const lastCelebrated = useRef('');
 
   const refresh = useCallback(async () => {
     try {
@@ -64,6 +69,13 @@ export default function Shop({ user, onUserUpdated }: Props) {
     }
   }, []);
 
+  // The celebration (and any other coin event) can push a new balance straight
+  // to this HUD — no refetch needed.
+  useEffect(() => onHudCoins((c) => {
+    setCoins(c);
+    onUserUpdated({ ...user, coins: c });
+  }), [user, onUserUpdated]);
+
   useEffect(() => { void refresh(); }, [refresh]);
 
   async function buy(item: ShopItem) {
@@ -75,6 +87,13 @@ export default function Shop({ user, onUserUpdated }: Props) {
       setCoins(r.coins);
       onUserUpdated({ ...user, coins: r.coins });
       setNotice(`${item.name} unlocked! Visit the Wardrobe to wear it.`);
+      // Celebrate exactly once per confirmed purchase, before the refetch can
+      // stomp the balance (celebratePurchase also bumps every coin HUD).
+      const key = `${item.id}:${r.coins}`;
+      if (lastCelebrated.current !== key) {
+        lastCelebrated.current = key;
+        celebratePurchase({ itemName: item.name, price: item.price, coins: r.coins });
+      }
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -83,7 +102,7 @@ export default function Shop({ user, onUserUpdated }: Props) {
     }
   }
 
-  const categories: ShopItem['category'][] = ['hair', 'armor', 'helmet', 'pack'];
+  const categories: ShopItem['category'][] = ['hair', 'armor', 'helmet', 'cape', 'pack'];
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>
@@ -91,7 +110,13 @@ export default function Shop({ user, onUserUpdated }: Props) {
         <p className="pixel-font" style={{ fontSize: '0.9rem', margin: 0 }}>🪙 THE ROYAL SHOP</p>
         <p className="pixel-font" style={{ fontSize: '1rem', color: 'var(--d-gold)', margin: 0 }}>
           <img src={spriteDataUrl('coin')} alt="" style={{ width: 14, height: 14, marginRight: 4 }} />
-          {coins}
+          <span
+            className="coin-count-value"
+            data-coins={coins}
+            style={{ display: 'inline-block', minWidth: '2ch', textAlign: 'right' }}
+          >
+            {coins}
+          </span>
         </p>
       </div>
 

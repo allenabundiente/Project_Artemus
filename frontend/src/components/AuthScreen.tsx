@@ -32,7 +32,14 @@ export default function AuthScreen({ onAuthed }: Props) {
 
   return (
     <div className="title-screen" style={{ maxWidth: 480, margin: '0 auto' }}>
-      <h1>CODEBOOK ARCADE</h1>
+      <img
+        src="/favicon.svg"
+        alt="QuestBook logo"
+        width={96}
+        height={96}
+        style={{ display: 'block', margin: '0 auto 0.75rem', imageRendering: 'pixelated' }}
+      />
+      <h1>QUESTBOOK</h1>
       <p className="term-font" style={{ fontSize: '1.3rem', color: 'var(--d-gold)' }}>
         Choose your hero. Enter the realm.
       </p>

@@ -1,5 +1,5 @@
 -- ============================================================
--- CodeBook Arcade — core schema (Supabase-compatible Postgres)
+-- QuestBook — core schema (Supabase-compatible Postgres)
 -- Run in Supabase SQL editor in order: 0001, then 0002, then 0003.
 -- ============================================================
 

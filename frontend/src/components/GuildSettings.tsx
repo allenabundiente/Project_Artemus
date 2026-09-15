@@ -5,6 +5,11 @@ import ThemeCard from './ThemeCard';
 
 interface Props {
   onSaved: () => void;
+  /**
+   * When set (admin panel), manage THAT guild's settings through the admin
+   * endpoints instead of the signed-in leader's own guild.
+   */
+  guildId?: string;
 }
 
 const TERMS: Term[] = ['prelims', 'midterms', 'semis', 'finals'];
@@ -15,7 +20,7 @@ const TERM_LABEL: Record<Term, string> = {
   finals: 'FINALS',
 };
 
-export default function GuildSettings({ onSaved }: Props) {
+export default function GuildSettings({ onSaved, guildId }: Props) {
   const [settings, setSettings] = useState<Record<string, TermSettings>>({});
   const [activeTerm, setActiveTerm] = useState<Term>('prelims');
   const [dirty, setDirty] = useState(false);
@@ -35,17 +40,21 @@ export default function GuildSettings({ onSaved }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.getGuildSettings();
+        const res = guildId ? await api.getAdminGuildSettings(guildId) : await api.getGuildSettings();
         setSettings(res.termSettings);
         setDirty(false);
       } catch (e) {
         setError((e as Error).message);
       }
     })();
-    api.getLlmStatus().then(setLlm).catch(() => setLlm(null));
-    api.getThemes().then((r) => setThemes(r.themes)).catch(() => setThemes([]));
-    api.getGuildMap().then((r) => setMapTheme(r.theme)).catch(() => setMapTheme(null));
-  }, []);
+    // The AI smith + map skin panels are leader-scoped; only show them when
+    // managing one's own guild.
+    if (!guildId) {
+      api.getLlmStatus().then(setLlm).catch(() => setLlm(null));
+      api.getThemes().then((r) => setThemes(r.themes)).catch(() => setThemes([]));
+      api.getGuildMap().then((r) => setMapTheme(r.theme)).catch(() => setMapTheme(null));
+    }
+  }, [guildId]);
 
   async function saveMap(theme: string | null) {
     setMapTheme(theme);
@@ -90,10 +99,13 @@ export default function GuildSettings({ onSaved }: Props) {
   }
 
   async function save() {
+    if (!guildId && !current) return; // own-guild mode always has settings loaded
     setBusy(true);
     setError(null);
     try {
-      const res = await api.saveGuildSettings(settings);
+      const res = guildId
+        ? await api.saveAdminGuildSettings(guildId, settings)
+        : await api.saveGuildSettings(settings);
       setSettings(res.termSettings);
       setDirty(false);
       onSaved();
@@ -124,7 +136,9 @@ export default function GuildSettings({ onSaved }: Props) {
   return (
     <div style={{ maxWidth: 680, margin: '0 auto' }}>
       <div className="pixel-panel">
-        <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>⚙ GUILD MASTER SETTINGS</p>
+        <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>
+          {guildId ? '⚙ GUILD SETTINGS (CROWN MANAGEMENT)' : '⚙ GUILD MASTER SETTINGS'}
+        </p>
 
         <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
           {TERMS.map((t) => (
@@ -259,6 +273,7 @@ export default function GuildSettings({ onSaved }: Props) {
         </div>
       </div>
 
+      {!guildId && (
       <div className="pixel-panel" style={{ marginTop: '1rem' }}>
         <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>🧙 AI CHALLENGE SMITH</p>
         <p className="term-font" style={{ fontSize: '1.05rem', margin: '0.3rem 0 0.8rem' }}>
@@ -287,7 +302,9 @@ export default function GuildSettings({ onSaved }: Props) {
         {regenResult && <p className="term-font" style={{ fontSize: '1rem', marginTop: '0.6rem', color: 'var(--d-gold)' }}>{regenResult}</p>}
         {regenError && <p className="error-text" style={{ marginTop: '0.6rem' }}>{regenError}</p>}
       </div>
+      )}
 
+      {!guildId && (
       <div className="pixel-panel" style={{ marginTop: '1rem' }}>
         <p className="pixel-font" style={{ fontSize: '0.75rem', margin: '0 0 0.25rem' }}>🗺 MAP SKIN</p>
         <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0 0 0.6rem' }}>
@@ -326,6 +343,7 @@ export default function GuildSettings({ onSaved }: Props) {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

@@ -112,7 +112,7 @@ export async function parsePdf(buffer: Buffer, fallbackTitle: string): Promise<P
   if (totalChars < 200) {
     throw new Error(
       'This PDF appears to be scanned or image-based — almost no extractable text was found. ' +
-      'CodeBook Arcade needs a text-based PDF (one where you can select/copy text).'
+      'QuestBook needs a text-based PDF (one where you can select/copy text).'
     );
   }
 

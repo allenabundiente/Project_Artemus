@@ -56,6 +56,8 @@ export default function ChallengeDialog({ challenge, onResult, onDismiss, disabl
     predict_output: 'PREDICT THE OUTCOME',
     spot_the_bug: 'SPOT THE BUG',
     fill_in_blank: 'FILL IN THE BLANK',
+    true_false: 'TRUTH OR LIE',
+    short_answer: 'SPEAK YOUR ANSWER',
   };
 
   return (

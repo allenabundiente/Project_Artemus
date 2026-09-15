@@ -113,7 +113,7 @@ export async function callOpenAiCompatible(system: string, user: string, maxToke
       authorization: `Bearer ${apiKey}`,
       // OpenRouter-specific but harmless elsewhere: attribution headers.
       'http-referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:5173',
-      'x-title': 'CodeBook Arcade',
+      'x-title': 'QuestBook',
     },
     body: JSON.stringify({
       model,

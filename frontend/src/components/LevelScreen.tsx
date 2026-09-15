@@ -4,9 +4,12 @@ import * as api from '../api';
 import { ArcadeEngine, buildLayout, BACKING_W, BACKING_H } from '../game/engine';
 import { loadSprites, spriteDataUrl } from '../game/sprites';
 import { getAnimations, loadExtraSprites } from '../game/animations';
+import { dealQuestPlan, type QuestPlan } from '../game/questPlan';
 import { sfx } from '../game/sfx';
 import { loadCustomThemes, resolveTheme } from '../game/themes';
 import BattleScreen from './BattleScreen';
+import TouchControls from './TouchControls';
+import LandscapeHint from './LandscapeHint';
 
 interface Props {
   bookId: string;
@@ -32,7 +35,8 @@ interface FailOutcome {
 export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avatar, onExit, onComplete, onFailSettled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<ArcadeEngine | null>(null);
-  const challengesRef = useRef<import('../types').Challenge[]>([]);
+  /** Per-run dealt plan: distinct challenge per heart + the boss repeat queue. */
+  const planRef = useRef<QuestPlan | null>(null);
   const streakRef = useRef(0);
   const mistakesRef = useRef(0);
   const startedAtRef = useRef<number>(Date.now());
@@ -44,6 +48,8 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   phaseRef.current = phase;
   const [battleMonster, setBattleMonster] = useState(0);
   const [battleKey, setBattleKey] = useState(0);
+  /** Hearts the engaged monster has when the battle opens (resume multi-heart fights). */
+  const [battleMaxHp, setBattleMaxHp] = useState(1);
   const [lives, setLives] = useState(3);
   livesRef.current = lives;
   const [score, setScore] = useState(0);
@@ -60,6 +66,12 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   const termSettingsRef = useRef<{ timeLimitSeconds: number } | null>(null);
   /** Sprite slot of the monster the player is currently battling. */
   const fightingSlotRef = useRef<string>('enemy_goblin');
+  // Touch devices (phones/tablets) get the on-screen D-pad; desktops with a
+  // fine pointer keep keyboard-only and never see the pad.
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    setIsTouch(window.matchMedia?.('(pointer: coarse)').matches ?? false);
+  }, []);
 
   // --- init: load challenges + term settings, build layout, spin up engine ----
   useEffect(() => {
@@ -77,14 +89,21 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
           return;
         }
         termSettingsRef.current = { timeLimitSeconds: termInfo.settings.timeLimitSeconds };
-        challengesRef.current = challenges;
+        // Deal the run: every monster gets DISTINCT challenges (no repeats
+        // within this quest), sized by the guild's difficulty setting. Higher
+        // difficulty → fewer but tougher (multi-heart) monsters, and every
+        // challenge is dealt exactly once. The boss's queue is the set the
+        // student will already have faced during this run.
+        const seed = Math.floor(Math.random() * 0x7fffffff);
+        const plan = dealQuestPlan(challenges, termInfo.settings.monsterDifficulty, seed);
+        planRef.current = plan;
         const sprites = await loadSprites();
         if (cancelled) return;
         // Admin-uploaded custom frames + animation clips (best-effort).
-        await loadExtraSprites(sprites);
         const animations = await getAnimations();
         if (cancelled) return;
-        const layout = buildLayout(chapterId, challenges);
+        await loadExtraSprites(sprites, animations);
+        const layout = buildLayout(chapterId, plan);
         const canvas = canvasRef.current!;
         canvas.width = BACKING_W;
         canvas.height = BACKING_H;
@@ -105,6 +124,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
             setBattleMonster(i);
             setBattleKey((k) => k + 1);
             fightingSlotRef.current = fightingSlot(i);
+            setBattleMaxHp(engineRef.current?.getMonsterHp(i) ?? 1);
             setPhase('battle');
           },
           onBossEncounter: () => {
@@ -240,8 +260,17 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
     setStreak(0);
   }, []);
 
+  /** A correct answer landed: knock one heart off the engaged monster. */
+  const handleMonsterHit = useCallback((monsterIndex: number) => {
+    engine()?.hitMonster(monsterIndex);
+  }, []);
+
   const handleBattleRetreat = useCallback(() => {
-    engine()?.retreatFromBattle();
+    if (phaseRef.current === 'boss') {
+      engine()?.retreatFromBoss(); // re-arm the gate — the boss awaits again
+    } else {
+      engine()?.retreatFromBattle();
+    }
     setPhase('playing');
   }, []);
 
@@ -328,28 +357,36 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         </button>
       </div>
 
-      <canvas id="game-canvas" ref={canvasRef} />
+      {/* Wrapper is the overlay anchor: touch controls float over the canvas
+          instead of stacking below it and pushing the game down the page. */}
+      <div className="game-canvas-wrap">
+        <canvas id="game-canvas" ref={canvasRef} />
+        {isTouch && phase === 'playing' && <TouchControls engine={engineRef.current} />}
+      </div>
 
-      {phase === 'battle' && (
+      <LandscapeHint active={phase === 'playing'} />
+
+      {phase === 'battle' && planRef.current && (
         <div className="modal-overlay">
           <BattleScreen
             key={`battle-${battleKey}`}
-            challenges={challengesRef.current}
-            monsterSlot={fightingSlotRef.current}
-            leadChallenge={challengesRef.current[battleMonster]}
+            queue={planRef.current.monsterQueues[battleMonster] ?? []}
+            maxHp={Math.max(1, battleMaxHp)}
             lives={lives}
             onDamage={handleBattleDamage}
+            onHit={() => handleMonsterHit(battleMonster)}
             onRetreat={handleBattleRetreat}
             onVictory={() => handleBattleVictory(battleMonster)}
           />
         </div>
       )}
 
-      {phase === 'boss' && (
+      {phase === 'boss' && planRef.current && (
         <div className="modal-overlay">
           <BattleScreen
             key={`boss-${battleKey}`}
-            challenges={challengesRef.current}
+            queue={planRef.current.bossQueue}
+            maxHp={planRef.current.bossQueue.length}
             lives={lives}
             boss
             onDamage={handleBattleDamage}

@@ -1,5 +1,5 @@
 // Admin, shop, cosmetics, feature locks, and map config data layer.
-import { query, queryOne } from './db.js';
+import { query, queryOne, execute, withTransaction } from './db.js';
 
 // --- feature locks -----------------------------------------------------------
 
@@ -57,13 +57,12 @@ export async function upsertShopItem(item: {
 }
 
 export async function deleteShopItem(id: string): Promise<boolean> {
-  const r = await query(`DELETE FROM shop_items WHERE id = $1`, [id]);
-  return r.length > 0;
+  return (await execute(`DELETE FROM shop_items WHERE id = $1`, [id])) > 0;
 }
 
 // --- inventory / purchases ---------------------------------------------------
 
-export async function purchaseItem(userId: string, itemId: string, coins: number): Promise<
+export async function purchaseItem(userId: string, itemId: string): Promise<
   { ok: true; coins: number; item: ShopItemRow } | { ok: false; reason: string }
 > {
   const item = await queryOne<ShopItemRow>(
@@ -73,19 +72,25 @@ export async function purchaseItem(userId: string, itemId: string, coins: number
   if (!item) return { ok: false, reason: 'Item not found' };
   const owned = await queryOne(`SELECT 1 AS x FROM user_items WHERE user_id = $1 AND item_id = $2`, [userId, itemId]);
   if (owned) return { ok: false, reason: 'Already owned' };
-  if (coins < item.price) return { ok: false, reason: 'Not enough coins' };
 
-  // Atomic: deduct coins + insert inventory together.
-  await query(`BEGIN`);
+  // Atomic: deduct coins + insert inventory in ONE real transaction on a single
+  // pooled connection (BEGIN/COMMIT over separate pool.checkouts would be a
+  // fiction — and a leaked transaction — under concurrency).
   try {
-    await query(`UPDATE users SET coins = coins - $2, coins_spent = coins_spent + $2 WHERE id = $1 AND coins >= $2`, [userId, item.price]);
-    const after = await queryOne<{ coins: number }>(`SELECT coins FROM users WHERE id = $1`, [userId]);
-    if (!after || after.coins < 0) throw new Error('insufficient');
-    await query(`INSERT INTO user_items (user_id, item_id) VALUES ($1, $2)`, [userId, itemId]);
-    await query(`COMMIT`);
-    return { ok: true, coins: after.coins, item };
+    const coins = await withTransaction(async (tx) => {
+      // The WHERE coins >= price guard makes double-spend impossible even if
+      // two purchases race past the ownership check above.
+      const res = await tx.query<{ coins: number }>(
+        `UPDATE users SET coins = coins - $2, coins_spent = coins_spent + $2
+         WHERE id = $1 AND coins >= $2 RETURNING coins`,
+        [userId, item.price],
+      );
+      if (!res.rows[0]) throw new Error('insufficient');
+      await tx.query(`INSERT INTO user_items (user_id, item_id) VALUES ($1, $2)`, [userId, itemId]);
+      return Number(res.rows[0].coins);
+    });
+    return { ok: true, coins, item };
   } catch (e) {
-    await query(`ROLLBACK`);
     return { ok: false, reason: (e as Error).message === 'insufficient' ? 'Not enough coins' : 'Purchase failed' };
   }
 }

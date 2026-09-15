@@ -1,4 +1,4 @@
-export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank';
+export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
 
 export interface Challenge {
   id: string;
@@ -19,6 +19,17 @@ export interface BookMeta {
   filename: string;
   ownerId: string | null;
   guildId: string | null;
+  /** Teacher-chosen challenge count for this PDF (null = auto). */
+  questCount: number | null;
+  /** How many chapters become playable quests (null = auto, max 12). */
+  questChapters: number | null;
+  /** Teacher lock: hidden from players until unlocked. */
+  locked: boolean;
+  /** Availability window (ISO strings; null = unbounded on that side). */
+  availableFrom: string | null;
+  availableUntil: string | null;
+  /** 'general' (any subject) or 'programming' (code-flavored questions). */
+  quizMode: QuizMode;
   createdAt: string;
   /** Teacher-set quest cap; null/undefined = unlimited. */
   questLimit?: number | null;
@@ -38,15 +49,31 @@ export interface BookDetail extends BookMeta {
   chapters: ChapterMeta[];
 }
 
+/** One chapter's challenges in the teacher review feed. */
+export interface ChapterChallengeReview {
+  chapterId: string;
+  idx: number;
+  title: string;
+  challenges: Challenge[];
+}
+
+export interface BookChallengeReview {
+  bookId: string;
+  chapters: ChapterChallengeReview[];
+}
+
 export interface Progress {
   completedChapters: string[];
   score: number;
   bestStreak: number;
 }
 
+export type QuizMode = 'general' | 'programming' | 'language';
+
 export interface UploadResult {
   bookId: string;
   title: string;
+  quizMode: QuizMode;
   chapters: { idx: number; title: string }[];
 }
 
@@ -120,6 +147,25 @@ export interface FeatureRow {
   locked: boolean;
 }
 
+/** One row of the royal audit trail (who did what, when). */
+export interface AuditEntry {
+  id: number;
+  actorId: string | null;
+  actorName: string;
+  action: string;
+  target: string;
+  detail: Record<string, unknown>;
+  createdAt: string;
+}
+
+/** An admin account, for the panel's admin-management tab. */
+export interface AdminAccount {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: string;
+}
+
 export interface MapConfig {
   mode: 'fixed' | 'random_by_difficulty';
   fixedTheme: string;
@@ -180,6 +226,16 @@ export interface GuildInfo {
   name: string;
   passcode?: string;
   termSettings?: Record<string, unknown>;
+}
+
+/** Admin directory row: every guild with its leader, code, and size. */
+export interface GuildAdminInfo {
+  id: string;
+  name: string;
+  passcode: string;
+  teacherId: string;
+  teacherName: string;
+  memberCount: number;
 }
 
 export interface RosterEntry {

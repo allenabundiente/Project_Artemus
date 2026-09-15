@@ -1,4 +1,4 @@
-# CodeBook Arcade — Asset & Cosmetics Guide
+# QuestBook — Asset & Cosmetics Guide
 
 Everything you need to add your own sprites, map themes, and characters — without
 breaking the game. Written for friends contributing art; no engine knowledge required.

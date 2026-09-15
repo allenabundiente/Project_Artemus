@@ -10,4 +10,8 @@ backend/data/
 release/
 *.log
 backend/data/arcade.db-*
+backend/public/
+frontend/public/sprites/animations.json
+.local-preview/
 .DS_Store
+.freebuff/

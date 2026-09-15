@@ -3,6 +3,7 @@ import * as api from '../api';
 import type { AuthUser, BookDetail, BookMeta, GuildInfo, Progress, Term } from '../types';
 import { spriteDataUrl } from '../game/sprites';
 import { rankForScore } from '../game/ranks';
+import { onHudCoins } from '../game/hudCoins';
 import RankBadge from './RankBadge';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import WorldMap from './WorldMap';
@@ -55,7 +56,15 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [term, setTerm] = useState<Term>('prelims');
+  /** Quest count for the NEXT upload ('' = auto). */
+  const [uploadQuestCount, setUploadQuestCount] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  // The HUD coin counter shows this (session-pushed) balance when it differs
+  // from the user-prop balance — celebrations bump it without a refetch.
+  const [hudCoins, setHudCoins] = useState<number | null>(null);
+  useEffect(() => onHudCoins((c) => setHudCoins(c)), []);
+  // A fresh authoritative balance (quest payout, refetch) wins again.
+  useEffect(() => { setHudCoins(null); }, [userProp.coins]);
 
   const refreshBooks = useCallback(async () => {
     try {
@@ -90,6 +99,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       const res = await api.regeneratePasscode();
       setGuildCode(res.passcode);
       setNotice(`New guild code: ${res.passcode}`);
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -112,7 +122,8 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
     setNotice(null);
     setBusy('Deciphering the ancient tome…');
     try {
-      const up = await api.uploadPdf(file);
+      const questCount = uploadQuestCount ? Number(uploadQuestCount) : null;
+      const up = await api.uploadPdf(file, questCount);
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
       setNotice(`"${up.title}" is ready — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
@@ -132,6 +143,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       onUserUpdated(res.user);
       setNotice(`You joined the guild "${res.guild.name}"!`);
       setPasscode('');
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -146,6 +158,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       const res = await api.leaveGuild();
       onUserUpdated(res.user);
       setNotice('You left the guild. You are a solo adventurer once more.');
+      api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -188,7 +201,9 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           <RankBadge rank={rank} />
           <span className="coin-count">
             <img src={spriteDataUrl('coin')} alt="" style={{ width: 14, height: 14 }} />
-            <span className="label">{user.coins}</span>
+            <span className="label coin-count-value" data-coins={hudCoins ?? user.coins}>
+              {hudCoins ?? user.coins}
+            </span>
           </span>
           {guild && <span className="label">🏰 {guild.name}</span>}
         </div>
@@ -216,6 +231,18 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
                 <select className="pixel-select" value={term} onChange={(e) => setTerm(e.target.value as Term)} style={{ marginRight: '0.4rem' }}>
                   {(['prelims', 'midterms', 'semis', 'finals'] as Term[]).map((t) => (
                     <option key={t} value={t}>{t.toUpperCase()}</option>
+                  ))}
+                </select>
+                <select
+                  className="pixel-select"
+                  value={uploadQuestCount}
+                  onChange={(e) => setUploadQuestCount(e.target.value)}
+                  style={{ marginRight: '0.4rem' }}
+                  title="How many monsters this tome summons (per book)"
+                >
+                  <option value="">QUESTS: AUTO</option>
+                  {['5', '8', '10', '12', '15', '20', '30', '40', '50'].map((c) => (
+                    <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
                 <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>

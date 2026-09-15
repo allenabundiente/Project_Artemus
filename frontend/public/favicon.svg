@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <!-- QuestBook mark: a pixel-art golden SHIELD-BOOK — the shield silhouette
+       from the placeholder, now reading as an open tome (spine + page lines).
+       Drawn on a 16×16 grid; the header renders it at 96px and the favicon at
+       16–32px, so every rect stays ≥1 unit and snaps to crisp edges. -->
+  <rect width="16" height="16" fill="#2a1f2e"/>
+
+  <!-- black outline: shield-shaped book cover -->
+  <rect x="3" y="1" width="10" height="1" fill="#140d0a"/>
+  <rect x="2" y="2" width="12" height="8" fill="#140d0a"/>
+  <rect x="3" y="10" width="10" height="1" fill="#140d0a"/>
+  <rect x="4" y="11" width="8" height="1" fill="#140d0a"/>
+  <rect x="5" y="12" width="6" height="1" fill="#140d0a"/>
+  <rect x="6" y="13" width="4" height="1" fill="#140d0a"/>
+  <rect x="7" y="14" width="2" height="1" fill="#140d0a"/>
+
+  <!-- gold cover (shield face) -->
+  <rect x="3" y="2" width="10" height="8" fill="#e8b43c"/>
+  <rect x="4" y="10" width="8" height="1" fill="#e8b43c"/>
+  <rect x="5" y="11" width="6" height="1" fill="#e8b43c"/>
+  <rect x="6" y="12" width="4" height="1" fill="#e8b43c"/>
+  <rect x="7" y="13" width="2" height="1" fill="#e8b43c"/>
+
+  <!-- top-left bevel highlight -->
+  <rect x="3" y="2" width="5" height="1" fill="#ffd76a"/>
+  <rect x="3" y="3" width="1" height="4" fill="#ffd76a"/>
+  <!-- bottom-right shade -->
+  <rect x="12" y="4" width="1" height="6" fill="#b8862a"/>
+  <rect x="8" y="10" width="4" height="1" fill="#b8862a"/>
+
+  <!-- book spine: dark vertical band down the middle -->
+  <rect x="7" y="2" width="2" height="9" fill="#8b5a2b"/>
+  <rect x="7" y="2" width="1" height="9" fill="#533a1e"/>
+
+  <!-- page lines on each cover half (the "text" of the tome) -->
+  <rect x="4" y="4" width="3" height="1" fill="#533a1e"/>
+  <rect x="4" y="6" width="3" height="1" fill="#533a1e"/>
+  <rect x="4" y="8" width="2" height="1" fill="#533a1e"/>
+  <rect x="9" y="4" width="3" height="1" fill="#533a1e"/>
+  <rect x="9" y="6" width="3" height="1" fill="#533a1e"/>
+  <rect x="10" y="8" width="2" height="1" fill="#533a1e"/>
+
+  <!-- red gem clasp where the covers meet -->
+  <rect x="6" y="5" width="4" height="3" fill="#a82a2a"/>
+  <rect x="7" y="5" width="2" height="1" fill="#c95d7a"/>
+</svg>

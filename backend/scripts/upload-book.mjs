@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const API = `http://localhost:${process.env.API_PORT || 4010}/api`;
 const PDF = process.argv[2];
-const EMAIL = process.argv[3] || 'teacher.csharp@codebook.local';
+const EMAIL = process.argv[3] || 'teacher.csharp@questbook.local';
 const PASSWORD = process.env.SEED_PASSWORD || 'Guildmaster-2026!';
 const GUILD_NAME = 'Guild of the Sharp Sign';
 

@@ -1,7 +1,7 @@
 import type {
-  AuthResponse, AuthUser, BookDetail, BookMeta, Challenge, FeatureRow, GenerateResult,
-  GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
-  Progress, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
+  AdminAccount, AuditEntry, AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, FeatureRow,
+  GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
+  Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
 } from './types';
 
@@ -19,6 +19,16 @@ export function setToken(token: string | null): void {
 export function authHeaders(): Record<string, string> {
   const t = getToken();
   return t ? { authorization: `Bearer ${t}` } : {};
+}
+
+/**
+ * Hard-refresh the whole app after an identity-level change (joining or
+ * leaving a guild, regenerating a guild code, dismissing a member): every
+ * screen that flows from App's user/guild state — header, panels, rosters —
+ * is rebuilt from the server, so nothing can stay stale.
+ */
+export function refreshApp(): void {
+  window.location.reload();
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -86,6 +96,39 @@ export async function leaveGuild(): Promise<{ user: AuthUser }> {
   return send('/api/guilds/leave', 'POST');
 }
 
+// --- guild member management (teacher) ----------------------------------------------
+
+/** Kick a student from your guild — their account, coins, and scores survive. */
+export async function removeGuildMember(userId: string): Promise<{ removed: { id: string; name: string } }> {
+  return send(`/api/guilds/mine/members/${userId}`, 'DELETE');
+}
+
+// --- guild management (admin: any guild, by id) ---------------------------------------
+
+export async function getAdminGuilds(): Promise<{ guilds: GuildAdminInfo[] }> {
+  return get('/api/admin/guilds');
+}
+
+export async function getAdminGuildMembers(guildId: string): Promise<{ roster: RosterEntry[] }> {
+  return get(`/api/admin/guilds/${guildId}/members`);
+}
+
+export async function removeAdminGuildMember(guildId: string, userId: string): Promise<{ removed: { id: string; name: string } }> {
+  return send(`/api/admin/guilds/${guildId}/members/${userId}`, 'DELETE');
+}
+
+export async function regenerateAdminGuildPasscode(guildId: string): Promise<{ passcode: string }> {
+  return send(`/api/admin/guilds/${guildId}/regenerate-passcode`, 'POST');
+}
+
+export async function getAdminGuildSettings(guildId: string): Promise<{ guildId: string; termSettings: Record<string, TermSettings> }> {
+  return get(`/api/admin/guilds/${guildId}/settings`);
+}
+
+export async function saveAdminGuildSettings(guildId: string, termSettings: Record<string, TermSettings>): Promise<{ guildId: string; termSettings: Record<string, TermSettings> }> {
+  return send(`/api/admin/guilds/${guildId}/settings`, 'PUT', { termSettings });
+}
+
 // --- term settings (teacher) ---------------------------------------------------------
 
 export async function getGuildSettings(): Promise<{ guildId: string; termSettings: Record<string, TermSettings> }> {
@@ -102,15 +145,42 @@ export async function getTermSettings(term: string): Promise<{ term: string; set
 
 // --- books -------------------------------------------------------------------------
 
-export async function uploadPdf(file: File): Promise<UploadResult> {
+export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto', questChapters?: number | null): Promise<UploadResult> {
   const form = new FormData();
   form.append('pdf', file);
+  if (questCount != null) form.append('questCount', String(questCount));
+  if (quizMode && quizMode !== 'auto') form.append('quizMode', quizMode);
+  if (questChapters != null) form.append('questChapters', String(questChapters));
   const res = await fetch('/api/upload', { method: 'POST', body: form, headers: authHeaders() });
   return json<UploadResult>(res);
 }
 
-export async function generateChallenges(bookId: string, term: string = 'prelims'): Promise<GenerateResult> {
-  return send<GenerateResult>(`/api/books/${bookId}/generate`, 'POST', { term });
+export async function generateChallenges(bookId: string, term: string = 'prelims', questCount?: number | null): Promise<GenerateResult> {
+  return send<GenerateResult>(`/api/books/${bookId}/generate`, 'POST', { term, ...(questCount !== undefined ? { questCount } : {}) });
+}
+
+/** Read or set a book's per-PDF quest settings (quest count; null = auto). */
+export async function setBookQuestCount(bookId: string, questCount: number | null, quizMode?: QuizMode, questChapters?: number | null): Promise<{ bookId: string; questCount: number | null; questChapters: number | null; quizMode: QuizMode }> {
+  return send(`/api/books/${bookId}/settings`, 'PUT', {
+    questCount,
+    ...(quizMode ? { quizMode } : {}),
+    ...(questChapters !== undefined ? { questChapters } : {}),
+  });
+}
+
+/** Wipe a book's challenges so the next generate() rebuilds them. */
+export async function regenerateBook(bookId: string): Promise<{ ok: boolean }> {
+  return send(`/api/books/${bookId}/regenerate`, 'POST');
+}
+
+/** All challenges in a book grouped by chapter — the teacher's review feed. */
+export async function getBookChallenges(bookId: string): Promise<BookChallengeReview> {
+  return get(`/api/books/${bookId}/challenges`);
+}
+
+/** Reject one challenge and have a fresh one generated in its place. */
+export async function regenerateChallenge(challengeId: string, term: string = 'prelims'): Promise<{ challenge: Challenge }> {
+  return send(`/api/challenges/${challengeId}/regenerate`, 'POST', { term });
 }
 
 export async function listBooks(): Promise<BookMeta[]> {
@@ -119,6 +189,19 @@ export async function listBooks(): Promise<BookMeta[]> {
 
 export async function getBook(bookId: string): Promise<BookDetail> {
   return get<BookDetail>(`/api/books/${bookId}`);
+}
+
+/** Delete a tome entirely (chapters, challenges, and progress go with it). */
+export async function deleteBook(bookId: string): Promise<{ ok: boolean; title: string }> {
+  return send(`/api/books/${bookId}`, 'DELETE');
+}
+
+/** Lock/unlock a tome or set its availability window (time-limited access). */
+export async function setBookAccess(
+  bookId: string,
+  gate: { locked?: boolean; availableFrom?: string | null; availableUntil?: string | null },
+): Promise<{ locked: boolean; availableFrom: string | null; availableUntil: string | null }> {
+  return send(`/api/books/${bookId}/access`, 'PUT', gate);
 }
 
 export async function getLesson(bookId: string, chapterId: string): Promise<LessonOverview> {
@@ -234,7 +317,7 @@ export async function setFeatureLock(key: string, locked: boolean): Promise<Feat
   return send(`/api/admin/features/${key}`, 'PUT', { locked });
 }
 
-export async function getAdminSprites(): Promise<{ manifest: Record<string, { width: number; height: number }>; files: string[] }> {
+export async function getAdminSprites(): Promise<{ manifest: Record<string, { width: number; height: number }>; files: string[]; custom?: string[]; versions?: Record<string, number> }> {
   return get('/api/admin/sprites');
 }
 
@@ -254,6 +337,30 @@ export async function uploadSpriteFrames(
     uploaded.push(slots[i]);
   }
   return { uploaded };
+}
+
+// --- admin: admin account management -------------------------------------------------
+
+export async function getAdminAccounts(): Promise<{ admins: AdminAccount[] }> {
+  return get('/api/admin/admins');
+}
+
+export async function createAdminAccount(name: string, email: string, password: string): Promise<{ admin: AdminAccount }> {
+  return send('/api/admin/admins', 'POST', { name, email, password });
+}
+
+export async function grantAdminAccount(email: string): Promise<{ admin: AdminAccount }> {
+  return send('/api/admin/admins/grant', 'POST', { email });
+}
+
+export async function demoteAdminAccount(id: string): Promise<{ admin: AdminAccount }> {
+  return send(`/api/admin/admins/${id}`, 'DELETE');
+}
+
+// --- admin: audit log ------------------------------------------------------------------
+
+export async function getAuditLog(limit = 100): Promise<{ entries: AuditEntry[] }> {
+  return get(`/api/admin/audit?limit=${limit}`);
 }
 
 export async function uploadSprite(slot: string, png: File): Promise<{ ok: boolean; slot: string }> {

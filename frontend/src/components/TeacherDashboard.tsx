@@ -40,6 +40,8 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
   const [bookCounts, setBookCounts] = useState<Record<string, string>>({});
   /** Per-tome quest-chapter edits (bookId → select value, '' = auto). */
   const [bookQuestChapters, setBookQuestChapters] = useState<Record<string, string>>({});
+  /** Which tomes are expanded (showing controls). */
+  const [expandedBooks, setExpandedBooks] = useState<Record<string, boolean>>({});
   /** Per-tome availability-window edits (bookId → datetime-local strings). */
   const [bookWindows, setBookWindows] = useState<Record<string, { from: string; until: string }>>({});
   const fileRef = useRef<HTMLInputElement>(null);
@@ -394,14 +396,14 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                 {books.length === 0 && <p className="status-text" style={{ margin: 0 }}>No tomes assigned yet.</p>}
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                   {books.map((b) => {
-                    const [expanded, setExpanded] = useState(false);
+                    const expanded = !!expandedBooks[b.id];
                     return (
                       <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.5rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                           <button
                             className="pixel-btn pixel-btn--ghost"
                             style={{ flex: 1, textAlign: 'left', textTransform: 'none', fontSize: '1rem' }}
-                            onClick={() => setExpanded(!expanded)}
+                            onClick={() => setExpandedBooks((m) => ({ ...m, [b.id]: !m[b.id] }))}
                           >
                             {expanded ? '▾' : '▸'} {b.title}
                           </button>

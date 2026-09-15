@@ -96,6 +96,83 @@ export async function leaveGuild(): Promise<{ user: AuthUser }> {
   return send('/api/guilds/leave', 'POST');
 }
 
+// --- guild chat ---------------------------------------------------------------------
+
+export interface ChatMessage {
+  id: string;
+  guildId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  avatar: Record<string, unknown>;
+  rank: string;
+  message: string;
+  createdAt: string;
+  /** Opaque full-precision polling cursor (`<µs>:<id>`) — pass back as-is. */
+  cursor: string;
+}
+
+/**
+ * Guild messages (initial load), or only ones after the opaque `cursor`
+ * (polling). The cursor is a server-minted token carrying full microsecond
+ * precision; never parse or reformat it on the client.
+ */
+export async function getGuildChat(cursor?: string): Promise<{ messages: ChatMessage[] }> {
+  return get(`/api/guilds/mine/chat${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
+}
+
+export async function postGuildChat(message: string): Promise<{ message: ChatMessage }> {
+  return send('/api/guilds/mine/chat', 'POST', { message });
+}
+
+export async function deleteGuildChatMessage(messageId: string): Promise<{ ok: boolean }> {
+  return send(`/api/guilds/mine/chat/${messageId}`, 'DELETE');
+}
+
+// --- announcements (teacher → guild notice board) -----------------------------------
+
+export interface Announcement {
+  id: string;
+  guildId: string;
+  teacherId: string;
+  teacherName: string;
+  title: string;
+  message: string;
+  createdAt: string;
+}
+
+export async function getAnnouncements(): Promise<{ announcements: Announcement[] }> {
+  return get('/api/guilds/mine/announcements');
+}
+
+export async function postAnnouncement(title: string, message: string): Promise<{ announcement: Announcement }> {
+  return send('/api/guilds/mine/announcements', 'POST', { title, message });
+}
+
+export async function deleteAnnouncement(id: string): Promise<{ ok: boolean }> {
+  return send(`/api/guilds/mine/announcements/${id}`, 'DELETE');
+}
+
+export async function getUnreadAnnouncements(): Promise<{ hasUnread: boolean; latestAnnouncementAt: string | null }> {
+  return get('/api/guilds/mine/announcements/unread');
+}
+
+export async function markAnnouncementsSeen(): Promise<{ ok: boolean }> {
+  return send('/api/guilds/mine/announcements/seen', 'POST');
+}
+
+// --- personal streaks ---------------------------------------------------------------
+
+export interface StreakInfo {
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: string | null;
+}
+
+export async function getStreak(): Promise<StreakInfo> {
+  return get('/api/me/streak');
+}
+
 // --- guild member management (teacher) ----------------------------------------------
 
 /** Kick a student from your guild — their account, coins, and scores survive. */

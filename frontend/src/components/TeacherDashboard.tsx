@@ -7,6 +7,8 @@ import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import Wardrobe from './Wardrobe';
 import RoyalGate from './RoyalGate';
 import ChallengeReview from './ChallengeReview';
+import Announcements from './Announcements';
+import GuildChat from './GuildChat';
 
 interface Props {
   user: AuthUser;
@@ -546,6 +548,18 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       {view === 'wardrobe' && (
         <RoyalGate feature="wardrobe">
           <Wardrobe initial={user.avatar ?? DEFAULT_AVATAR} onSaved={async (avatar) => { await onRefreshUser(); setNotice('Look saved! Your heraldry rides with you.'); void avatar; }} />
+        </RoyalGate>
+      )}
+
+      {/* Guild master tools: post to the notice board; chat pill stays handy. */}
+      {view === 'home' && guild && (
+        <RoyalGate feature="chat">
+          <Announcements user={user} isTeacher />
+        </RoyalGate>
+      )}
+      {guild && (
+        <RoyalGate feature="chat">
+          <GuildChat user={user} isTeacher mode="pill" />
         </RoyalGate>
       )}
     </div>

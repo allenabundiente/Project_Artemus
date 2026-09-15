@@ -613,3 +613,210 @@ export function rankForScore(score: number): string {
 // everything from './db.js' (admin.ts itself imports query/queryOne from here —
 // it must be imported last to avoid a circular-init hazard at module load).
 export * from './admin.js';
+
+// --- guild chat ---------------------------------------------------------------------
+
+export interface GuildMessageRow {
+  id: string;
+  guildId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  avatar: Record<string, unknown>;
+  message: string;
+  createdAt: Date;
+  /** Opaque full-precision polling cursor (`<epoch-microseconds>:<id>`). */
+  cursor: string;
+}
+
+function mapGuildMessage(r: any): GuildMessageRow {
+  return {
+    id: r.id, guildId: r.guild_id, userId: r.user_id,
+    userName: r.user_name, userRole: r.user_role,
+    avatar: ((r.avatar as Record<string, unknown>)?.avatar ?? r.avatar ?? {}) as Record<string, unknown>,
+    message: r.message, createdAt: new Date(r.created_at),
+    /** Opaque polling cursor: the strictly-monotonic delivery sequence. */
+    cursor: String(r.seq),
+  };
+}
+
+/** SELECT columns shared by every guild_messages query. */
+const GM_COLS = `gm.id, gm.guild_id, gm.user_id, u.name AS user_name, u.role AS user_role,
+            u.preferences AS avatar, gm.message, gm.created_at, gm.seq`;
+
+/** The N most recent messages of a guild, oldest-first for display. */
+export async function getGuildMessages(guildId: string, limit = 50): Promise<GuildMessageRow[]> {
+  const rows = await query(
+    `SELECT ${GM_COLS}
+     FROM guild_messages gm
+     JOIN users u ON u.id = gm.user_id
+     WHERE gm.guild_id = $1
+     ORDER BY gm.created_at DESC
+     LIMIT $2`,
+    [guildId, limit],
+  );
+  return rows.map(mapGuildMessage).reverse();
+}
+
+/**
+ * Messages strictly after the opaque `cursor` token — for chat polling.
+ *
+ * The token is the row's `seq` (a bigint identity), so ordering is exact and
+ * monotonic: no same-microsecond collisions, no precision loss through JSON
+ * (a timestamp cursor re-delivers the last message every poll — the "chat
+ * repeats forever" bug — and uuid tiebreakers sort randomly).
+ */
+export async function getGuildMessagesSince(guildId: string, cursor: string): Promise<GuildMessageRow[]> {
+  if (!/^\d+$/.test(cursor)) return []; // malformed cursor → nothing new
+  const rows = await query(
+    `SELECT ${GM_COLS}
+     FROM guild_messages gm
+     JOIN users u ON u.id = gm.user_id
+     WHERE gm.guild_id = $1 AND gm.seq > $2
+     ORDER BY gm.seq ASC
+     LIMIT 200`,
+    [guildId, BigInt(cursor)],
+  );
+  return rows.map(mapGuildMessage);
+}
+
+export async function insertGuildMessage(guildId: string, userId: string, message: string): Promise<GuildMessageRow> {
+  const row = await queryOne(
+    `INSERT INTO guild_messages (guild_id, user_id, message) VALUES ($1, $2, $3)
+     RETURNING id, guild_id, user_id, message, created_at, seq`,
+    [guildId, userId, message],
+  );
+  const user = await getUserById(userId);
+  return {
+    id: row!.id, guildId: row!.guild_id, userId: row!.user_id,
+    userName: user?.name ?? 'Unknown', userRole: user?.role ?? 'student',
+    avatar: ((user?.preferences as Record<string, unknown>)?.avatar ?? {}) as Record<string, unknown>,
+    message: row!.message, createdAt: new Date(row!.created_at),
+    cursor: String(row!.seq),
+  };
+}
+
+export async function deleteGuildMessage(messageId: string, guildId: string): Promise<boolean> {
+  return (await queryOne(`DELETE FROM guild_messages WHERE id = $1 AND guild_id = $2 RETURNING id`, [messageId, guildId])) != null;
+}
+
+// --- announcements -------------------------------------------------------------------
+
+export interface AnnouncementRow {
+  id: string;
+  guildId: string;
+  teacherId: string;
+  teacherName: string;
+  title: string;
+  message: string;
+  createdAt: Date;
+}
+
+/** A guild's notice board, newest-first. */
+export async function getAnnouncements(guildId: string, limit = 20): Promise<AnnouncementRow[]> {
+  const rows = await query(
+    `SELECT a.id, a.guild_id, a.teacher_id, u.name AS teacher_name,
+            a.title, a.message, a.created_at
+     FROM announcements a
+     JOIN users u ON u.id = a.teacher_id
+     WHERE a.guild_id = $1
+     ORDER BY a.created_at DESC
+     LIMIT $2`,
+    [guildId, limit],
+  );
+  return rows.map((r: any) => ({
+    id: r.id, guildId: r.guild_id, teacherId: r.teacher_id,
+    teacherName: r.teacher_name, title: r.title, message: r.message,
+    createdAt: new Date(r.created_at),
+  }));
+}
+
+export async function insertAnnouncement(guildId: string, teacherId: string, title: string, message: string): Promise<AnnouncementRow> {
+  const row = await queryOne(
+    `INSERT INTO announcements (guild_id, teacher_id, title, message) VALUES ($1, $2, $3, $4) RETURNING *`,
+    [guildId, teacherId, title, message],
+  );
+  const teacher = await getUserById(teacherId);
+  return {
+    id: row!.id, guildId: row!.guild_id, teacherId: row!.teacher_id,
+    teacherName: teacher?.name ?? 'Unknown', title: row!.title, message: row!.message,
+    createdAt: new Date(row!.created_at),
+  };
+}
+
+export async function deleteAnnouncement(announcementId: string, guildId: string): Promise<boolean> {
+  return (await queryOne(`DELETE FROM announcements WHERE id = $1 AND guild_id = $2 RETURNING id`, [announcementId, guildId])) != null;
+}
+
+export async function getLatestAnnouncementTime(guildId: string): Promise<Date | null> {
+  const row = await queryOne<{ created_at: Date }>(
+    `SELECT created_at FROM announcements WHERE guild_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [guildId],
+  );
+  return row ? new Date(row.created_at) : null;
+}
+
+// --- personal streaks ----------------------------------------------------------------
+
+/** Coins awarded on every 7th consecutive day of questing. */
+export const STREAK_BONUS_COINS = 50;
+
+export interface StreakInfo {
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: Date | null;
+}
+
+export async function getStreak(userId: string): Promise<StreakInfo> {
+  const row = await queryOne<{ current_streak: number; longest_streak: number; last_active_date: Date | null }>(
+    `SELECT current_streak, longest_streak, last_active_date FROM users WHERE id = $1`,
+    [userId],
+  );
+  return {
+    currentStreak: row?.current_streak ?? 0,
+    longestStreak: row?.longest_streak ?? 0,
+    lastActiveDate: row?.last_active_date ?? null,
+  };
+}
+
+/**
+ * Advance the daily streak after a successful quest. Returns the new streak
+ * length and the milestone bonus awarded (STREAK_BONUS_COINS on every 7th
+ * day) — the caller is responsible for crediting the bonus coins and for
+ * reflecting the extra balance in its response.
+ */
+export async function updateStreak(userId: string): Promise<{ streak: number; bonusAwarded: number }> {
+  const row = await queryOne<{ current_streak: number; longest_streak: number; last_active_date: Date | null }>(
+    `SELECT current_streak, longest_streak, last_active_date FROM users WHERE id = $1`,
+    [userId],
+  );
+  if (!row) return { streak: 0, bonusAwarded: 0 };
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  let streak = row.current_streak ?? 0;
+  if (row.last_active_date) {
+    const lastDay = new Date(row.last_active_date);
+    lastDay.setHours(0, 0, 0, 0);
+    if (lastDay.getTime() === today.getTime()) {
+      // already counted today — no change
+    } else if (lastDay.getTime() === yesterday.getTime()) {
+      streak += 1;
+    } else {
+      streak = 1; // missed a day — reset
+    }
+  } else {
+    streak = 1; // first ever quest
+  }
+
+  const bonusAwarded = streak > 0 && streak % 7 === 0 ? STREAK_BONUS_COINS : 0;
+  const longest = Math.max(row.longest_streak ?? 0, streak);
+  await query(
+    `UPDATE users SET current_streak = $1, longest_streak = $2, last_active_date = $3 WHERE id = $4`,
+    [streak, longest, today, userId],
+  );
+  return { streak, bonusAwarded };
+}

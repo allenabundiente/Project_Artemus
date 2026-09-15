@@ -289,4 +289,8 @@ export interface ScoreResultResponse {
   breakdown: { label: string; value: number }[];
   rank: RankName | string;
   term: string;
+  /** Daily quest streak after this completion (0 on fails). */
+  streak?: number;
+  /** Coins granted for hitting a 7-day streak milestone (0 otherwise). */
+  streakBonus?: number;
 }

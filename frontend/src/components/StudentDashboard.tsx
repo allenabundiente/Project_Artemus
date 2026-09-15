@@ -10,6 +10,9 @@ import WorldMap from './WorldMap';
 import LevelScreen from './LevelScreen';
 import LessonScreen from './LessonScreen';
 import Leaderboard from './Leaderboard';
+import GuildChat from './GuildChat';
+import Announcements from './Announcements';
+import StreakDisplay from './StreakDisplay';
 import Shop from './Shop';
 import Wardrobe from './Wardrobe';
 import RoyalGate from './RoyalGate';
@@ -65,6 +68,12 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   useEffect(() => onHudCoins((c) => setHudCoins(c)), []);
   // A fresh authoritative balance (quest payout, refetch) wins again.
   useEffect(() => { setHudCoins(null); }, [userProp.coins]);
+
+  // Streak chip updates when a quest completes (server-computed, bonus included).
+  const [questStreak, setQuestStreak] = useState<number | undefined>(undefined);
+  const [questStreakBonus, setQuestStreakBonus] = useState<number | undefined>(undefined);
+  // Notice board unread indicator (drives the HUD 📜! dot).
+  const [hasUnreadAnnouncements, setHasUnreadAnnouncements] = useState(false);
 
   const refreshBooks = useCallback(async () => {
     try {
@@ -165,15 +174,21 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   }
 
   const onQuestComplete = useCallback(
-    async (chapterId: string, result: { rawScore: number; coinsAwarded: number; coins: number; rank: string }) => {
+    async (chapterId: string, result: { rawScore: number; coinsAwarded: number; coins: number; rank: string; streak?: number; streakBonus?: number }) => {
       // result.coins is the server-confirmed balance AFTER the transaction
-      // committed — always reconcile to it rather than doing local math.
+      // committed (streak bonus included when one fired) — always reconcile
+      // to it rather than doing local math.
       onUserUpdated({ ...user, coins: result.coins });
+      if (result.streak !== undefined) {
+        setQuestStreak(result.streak);
+        setQuestStreakBonus(result.streakBonus ?? 0);
+      }
       if (book) {
         setProgress(await api.getProgress(book.id));
         setView({ name: 'map', bookId: book.id });
       }
-      setNotice(`Quest complete! +${result.rawScore} points · +${result.coinsAwarded} coins · Rank: ${result.rank}`);
+      const bonus = result.streakBonus ? ` · 🔥 +${result.streakBonus} streak bonus` : '';
+      setNotice(`Quest complete! +${result.rawScore} points · +${result.coinsAwarded} coins · Rank: ${result.rank}${bonus}`);
     },
     [book, user, onUserUpdated]
   );
@@ -206,6 +221,10 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
             </span>
           </span>
           {guild && <span className="label">🏰 {guild.name}</span>}
+          {hasUnreadAnnouncements && (
+            <span className="label" title="New announcements on the notice board" style={{ color: 'var(--d-gold)' }}>📜!</span>
+          )}
+          <StreakDisplay questStreak={questStreak} questStreakBonus={questStreakBonus} />
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {view.name !== 'home' && <button className="pixel-btn pixel-btn--ghost" onClick={() => setView({ name: 'home' })}>◀ HALL</button>}
@@ -326,6 +345,12 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
             </div>
           )}
 
+          {guild && !leads && (
+            <RoyalGate feature="chat">
+              <Announcements user={user} isTeacher={false} onUnreadChange={setHasUnreadAnnouncements} />
+            </RoyalGate>
+          )}
+
           <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto' }}>
             <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>📜 QUEST TOMES</p>
             {books.length === 0 && (
@@ -402,6 +427,20 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       {view.name === 'wardrobe' && (
         <RoyalGate feature="wardrobe">
           <Wardrobe initial={user.avatar ?? DEFAULT_AVATAR} onSaved={(avatar) => onUserUpdated({ ...user, avatar })} />
+        </RoyalGate>
+      )}
+
+      {/* Floating chat pill on every view. While a quest/lesson runs it is
+          suppressed: nothing renders (no overlap with the game), messages
+          accrue as unread, and the pill returns with its badge afterwards. */}
+      {guild && !leads && (
+        <RoyalGate feature="chat">
+          <GuildChat
+            user={user}
+            isTeacher={false}
+            mode="pill"
+            suppressAutoOpen={view.name === 'level' || view.name === 'lesson'}
+          />
         </RoyalGate>
       )}
     </div>

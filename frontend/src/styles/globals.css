@@ -897,3 +897,305 @@ canvas {
     animation: none !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Guild chat                                                          */
+/* ------------------------------------------------------------------ */
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: 420px;
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto 1.25rem;
+}
+
+.chat-panel__title {
+  font-size: 0.8rem;
+  margin: 0 0 0.5rem;
+}
+
+.chat-panel__log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 2px solid var(--d-black);
+  background: rgba(0, 0, 0, 0.25);
+  margin-bottom: 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--d-gold) transparent;
+}
+
+.chat-panel__log::-webkit-scrollbar { width: 8px; }
+.chat-panel__log::-webkit-scrollbar-thumb { background: var(--d-gold); }
+.chat-panel__empty {
+  text-align: center;
+  color: var(--d-stone-light);
+  margin: 2rem 0;
+}
+
+.chat-msg {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+  padding: 0.45rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 3px solid transparent;
+}
+
+.chat-msg--mine {
+  background: rgba(255, 215, 0, 0.08);
+  border-left-color: var(--d-gold);
+}
+
+.chat-msg__body { flex: 1; min-width: 0; }
+
+.chat-msg__meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.15rem;
+  flex-wrap: wrap;
+}
+
+.chat-msg__name { font-weight: bold; font-size: 0.85rem; }
+
+.chat-msg__role { font-size: 0.5rem; color: var(--d-gold); }
+
+.chat-msg__time { font-size: 0.7rem; color: var(--d-stone-light); }
+
+.chat-msg__text { margin: 0; word-break: break-word; }
+
+.chat-msg__del {
+  font-size: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  align-self: flex-start;
+}
+
+.chat-panel__composer { display: flex; gap: 0.5rem; }
+
+.chat-panel__input { flex: 1; font-size: 0.85rem; }
+
+.chat-panel__send { font-size: 0.7rem; }
+
+/* ------------------------------------------------------------------ */
+/* UX polish: motion comfort, touch targets, scrollbars                */
+/* ------------------------------------------------------------------ */
+
+/* Uniform slim scrollbars everywhere (WebKit + Firefox). */
+* { scrollbar-width: thin; scrollbar-color: var(--d-gold) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: rgba(232, 180, 60, 0.6); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* Reduced motion: soften every custom animation/transitions globally. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Every pixel-btn meets the 44px touch guideline on coarse pointers,
+   without changing desktop metrics. */
+@media (pointer: coarse) {
+  .pixel-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Announcements (notice board)                                        */
+/* ------------------------------------------------------------------ */
+.notice-board {
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto 1.25rem;
+  position: relative;
+}
+
+.notice-board__dot {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  background: var(--d-red);
+  color: var(--d-parchment);
+  border: 2px solid var(--d-black);
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: bold;
+  z-index: 2;
+  animation: dot-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+.notice-board__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.notice-board__title { font-size: 0.8rem; margin: 0; }
+
+.notice-board__form {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border: 2px solid var(--d-black);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.notice-board__empty {
+  text-align: center;
+  color: var(--d-stone-light);
+  margin: 1rem 0;
+}
+
+.notice-board__list { display: flex; flex-direction: column; gap: 0.75rem; }
+
+.notice-board__item {
+  padding: 0.75rem;
+  background: rgba(255, 215, 0, 0.07);
+  border: 1px solid rgba(255, 215, 0, 0.25);
+  position: relative;
+}
+
+.notice-board__item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.3rem;
+}
+
+.notice-board__item-title { margin: 0; font-size: 1rem; color: var(--d-gold); }
+
+.notice-board__del { font-size: 0.5rem; padding: 0.1rem 0.3rem; }
+
+.notice-board__item-text { margin: 0 0 0.4rem; white-space: pre-wrap; }
+
+.notice-board__item-by { font-size: 0.75rem; color: var(--d-stone-light); }
+
+/* ------------------------------------------------------------------ */
+/* Streak chip + milestone celebration                                 */
+/* ------------------------------------------------------------------ */
+.streak-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.5rem;
+  border: 2px solid var(--d-black);
+  background: rgba(255, 140, 0, 0.12);
+}
+
+.streak-chip__icon { font-size: 1rem; }
+
+.streak-chip__label { font-size: 0.75rem; color: var(--d-gold); }
+
+.streak-chip__best { font-size: 0.7rem; color: var(--d-stone-light); }
+
+.streak-celebrate {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 200;
+  animation: streak-pop 0.3s ease-out;
+}
+
+@keyframes streak-pop {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+.streak-celebrate__panel {
+  padding: 1.5rem 2rem;
+  text-align: center;
+  background: linear-gradient(135deg, rgba(255, 215, 0, 0.2), rgba(255, 140, 0, 0.2));
+  border: 2px solid var(--d-gold);
+  box-shadow: 0 0 30px rgba(255, 215, 0, 0.35);
+}
+
+.streak-celebrate__title { font-size: 1rem; margin: 0 0 0.4rem; color: var(--d-gold); }
+
+.streak-celebrate__sub { font-size: 1.1rem; margin: 0 0 0.4rem; }
+
+.streak-celebrate__bonus { font-size: 0.85rem; margin: 0; color: var(--d-gold-bright); }
+
+/* ------------------------------------------------------------------ */
+/* Floating chat pill (badge + auto-open entry point)                  */
+/* ------------------------------------------------------------------ */
+.chat-fab {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 90;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--d-panel, #241a30);
+  border: 2px solid var(--d-black);
+  box-shadow: 3px 3px 0 var(--d-black);
+  cursor: pointer;
+  color: var(--d-gold);
+}
+
+.chat-fab:hover { filter: brightness(1.1); transform: translate(-1px, -1px); }
+
+.chat-fab__badge {
+  background: var(--d-red);
+  color: var(--d-parchment);
+  border-radius: 50%;
+  min-width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: bold;
+  padding: 0 4px;
+}
+
+.chat-fab__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--d-red);
+  border: 2px solid var(--d-black);
+  animation: dot-pulse 1.8s ease-in-out infinite;
+}
+
+/* Floating chat panel (pill-opened) + header row */
+.chat-panel--floating {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 95;
+  width: min(360px, calc(100vw - 2.5rem));
+  margin: 0;
+  box-shadow: 6px 6px 0 var(--d-black);
+}
+
+.chat-panel__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.chat-panel__title { font-size: 0.8rem; margin: 0; }
+
+.chat-panel__min { font-size: 0.6rem; padding: 0 0.5rem; }

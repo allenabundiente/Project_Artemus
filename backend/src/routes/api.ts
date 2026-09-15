@@ -17,6 +17,9 @@ import {
   countChallenges, deleteChallengesForBook, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
   insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
+  getGuildMessages, getGuildMessagesSince, insertGuildMessage, deleteGuildMessage,
+  getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
+  getStreak, updateStreak, STREAK_BONUS_COINS,
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
   getChallenge, replaceChallenge, nextChallengeOrd,
@@ -425,6 +428,158 @@ export function createApiRouter(): Router {
     res.json({ user: publicUser(user) });
   });
 
+  // --- guild chat -----------------------------------------------------------------
+  // Polling MVP: clients fetch new messages every few seconds with ?since=.
+  // NB: these MUST stay registered before GET /guilds/:id below — otherwise the
+  // parametric route swallows /guilds/mine/chat and the panel never loads.
+
+  /** Recent guild messages (all of them, oldest-first) or only ?since= newer ones. */
+  router.get('/guilds/mine/chat', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(400).json({ error: 'You must be in a guild to use chat' });
+
+    // Opaque full-precision cursor (µs + id) — immune to the JSON/Postgres
+    // precision mismatch that made a timestamp cursor re-deliver the last
+    // message on every poll ("chat repeats forever").
+    const cursor = typeof req.query.cursor === 'string' && req.query.cursor ? req.query.cursor : null;
+    const messages = cursor
+      ? await getGuildMessagesSince(guild.id, cursor)
+      : await getGuildMessages(guild.id, 50);
+
+    // Rank per sender, resolved once per id (not per message — most messages
+    // come from the same handful of guildmates).
+    const scores = new Map<string, number>();
+    const rankOf = async (userId: string) => {
+      if (!scores.has(userId)) scores.set(userId, await getTermScore(userId, null));
+      return rankForScore(scores.get(userId)!);
+    };
+    const enriched = await Promise.all(messages.map(async (m) => ({ ...m, rank: await rankOf(m.userId) })));
+    res.json({ messages: enriched });
+  });
+
+  /** Post a message to the guild chat. */
+  router.post('/guilds/mine/chat', requireAuth, async (req, res) => {
+    try {
+      const user = await getUserById(req.user!.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      const guild = await resolveUserGuild(user);
+      if (!guild) return res.status(400).json({ error: 'You must be in a guild to use chat' });
+
+      const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      if (!message) return res.status(400).json({ error: 'Message cannot be empty' });
+      if (message.length > 1000) return res.status(400).json({ error: 'Message too long (max 1000 characters)' });
+
+      const newMsg = await insertGuildMessage(guild.id, user.id, message);
+      res.status(201).json({ message: { ...newMsg, rank: rankForScore(await getTermScore(user.id, null)) } });
+    } catch (e: any) {
+      console.error('[postChat]', e);
+      res.status(500).json({ error: 'Could not send message' });
+    }
+  });
+
+  /** Delete a message (teacher/admin of the guild only). */
+  router.delete('/guilds/mine/chat/:messageId', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(400).json({ error: 'You must be in a guild' });
+    if (user.role !== 'teacher' && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only teachers can moderate chat' });
+    }
+    const deleted = await deleteGuildMessage(String(req.params.messageId), guild.id);
+    if (!deleted) return res.status(404).json({ error: 'Message not found' });
+    res.json({ ok: true });
+  });
+
+  // --- announcements ---------------------------------------------------------------
+  // One-way broadcast: teachers post to their guild's notice board, students view.
+
+  /** Get announcements for the user's guild (newest-first). */
+  router.get('/guilds/mine/announcements', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.json({ announcements: [] });
+
+    const announcements = await getAnnouncements(guild.id);
+    res.json({ announcements });
+  });
+
+  /** Create an announcement (teacher/admin of the guild only). */
+  router.post('/guilds/mine/announcements', requireAuth, async (req, res) => {
+    try {
+      const user = await getUserById(req.user!.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      if (user.role !== 'teacher' && user.role !== 'admin') {
+        return res.status(403).json({ error: 'Only teachers can post announcements' });
+      }
+      const guild = await resolveUserGuild(user);
+      if (!guild) return res.status(400).json({ error: 'You must lead a guild to post announcements' });
+
+      const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+      const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+      if (!title) return res.status(400).json({ error: 'Title required' });
+      if (title.length > 200) return res.status(400).json({ error: 'Title too long (max 200 characters)' });
+      if (!message) return res.status(400).json({ error: 'Message required' });
+      if (message.length > 2000) return res.status(400).json({ error: 'Message too long (max 2000 characters)' });
+
+      const announcement = await insertAnnouncement(guild.id, user.id, title, message);
+      res.status(201).json({ announcement });
+    } catch (e: any) {
+      console.error('[postAnnouncement]', e);
+      res.status(500).json({ error: 'Could not post announcement' });
+    }
+  });
+
+  /** Delete an announcement (teacher/admin of the guild only). */
+  router.delete('/guilds/mine/announcements/:id', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.role !== 'teacher' && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only teachers can delete announcements' });
+    }
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(400).json({ error: 'You must lead a guild' });
+
+    const deleted = await deleteAnnouncement(String(req.params.id), guild.id);
+    if (!deleted) return res.status(404).json({ error: 'Announcement not found' });
+    res.json({ ok: true });
+  });
+
+  /** Unread check: does the guild have announcements newer than the user's last seen? */
+  router.get('/guilds/mine/announcements/unread', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.json({ hasUnread: false, latestAnnouncementAt: null });
+
+    const prefs = (user.preferences ?? {}) as Record<string, unknown>;
+    const lastSeenStr = typeof prefs.lastAnnouncementSeen === 'string' ? prefs.lastAnnouncementSeen : null;
+    const lastSeen = lastSeenStr ? new Date(lastSeenStr) : null;
+    const latest = await getLatestAnnouncementTime(guild.id);
+    const hasUnread = latest ? (!lastSeen || latest > lastSeen) : false;
+    res.json({ hasUnread, latestAnnouncementAt: latest?.toISOString() ?? null });
+  });
+
+  /** Mark announcements as seen (student viewed the notice board). */
+  router.post('/guilds/mine/announcements/seen', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const prefs = (user.preferences ?? {}) as Record<string, unknown>;
+    prefs.lastAnnouncementSeen = new Date().toISOString();
+    await query(`UPDATE users SET preferences = $1::jsonb WHERE id = $2`, [JSON.stringify(prefs), user.id]);
+    res.json({ ok: true });
+  });
+
+  // --- personal streaks ------------------------------------------------------------
+
+  /** The signed-in user's quest streak. */
+  router.get('/me/streak', requireAuth, async (req, res) => {
+    res.json(await getStreak(req.user!.id));
+  });
+
   // --- guild settings (teacher-only) ---------------------------------------------
 
   router.get('/guilds/mine/settings', requireRole('teacher'), async (req, res) => {
@@ -483,7 +638,11 @@ export function createApiRouter(): Router {
       // "1–2 long quests per PDF": how many chapters become quests. Body may be
       // 1-12, or absent/null/'' for auto (capped at 12 at generation time).
       const rawChapters = req.body?.questChapters;
-      const questChapters = rawChapters == null || rawChapters === '' ? null : Math.max(1, Math.min(12, Math.round(Number(rawChapters))));
+      const nChapters = rawChapters == null || rawChapters === '' ? null : Math.round(Number(rawChapters));
+      if (rawChapters != null && rawChapters !== '' && (!Number.isFinite(nChapters) || (nChapters as number) < 1 || (nChapters as number) > 12)) {
+        return res.status(400).json({ error: 'questChapters must be 1-12 or null for auto' });
+      }
+      const questChapters = Number.isFinite(nChapters as number) ? (nChapters as number) : null;
       // Filename detection (${topic}_code.pdf → programming) with explicit
       // teacher override taking precedence.
       const quizMode = detectQuizMode(req.file.originalname, req.body?.quizMode);
@@ -672,8 +831,12 @@ export function createApiRouter(): Router {
       const d = new Date(String(v));
       return Number.isNaN(d.getTime()) ? undefined : d; // invalid → ignore
     };
-    const from = parseBound(body.availableFrom) ?? book.availableFrom;
-    const until = parseBound(body.availableUntil) ?? book.availableUntil;
+    // NB: parseBound's undefined means "leave as-is"; an explicit null must
+    // CLEAR the bound, so a plain ?? here would silently keep the old value.
+    const fromParsed = parseBound(body.availableFrom);
+    const from = fromParsed === undefined ? book.availableFrom : fromParsed;
+    const untilParsed = parseBound(body.availableUntil);
+    const until = untilParsed === undefined ? book.availableUntil : untilParsed;
     if (from && until && from > until) return res.status(400).json({ error: 'availableFrom must be before availableUntil' });
 
     await updateBookAccess(book.id, { locked, availableFrom: from, availableUntil: until });
@@ -714,8 +877,8 @@ export function createApiRouter(): Router {
       }
       if (req.body?.questChapters !== undefined) {
         const raw = req.body.questChapters;
-        const n = raw === null || raw === '' ? null : Math.max(1, Math.min(12, Math.round(Number(raw))));
-        if (raw !== null && raw !== '' && !Number.isFinite(n)) {
+        const n = raw === null || raw === '' ? null : Math.round(Number(raw));
+        if (raw !== null && raw !== '' && (!Number.isFinite(n) || (n as number) < 1 || (n as number) > 12)) {
           return res.status(400).json({ error: 'questChapters must be 1-12 or null for auto' });
         }
         updated = await updateBookQuestChapters(bookId, Number.isFinite(n as number) ? (n as number) : null) ?? book;
@@ -866,6 +1029,11 @@ export function createApiRouter(): Router {
       coinsAwarded = 0;
     }
 
+    // Streak tracking: only successful completions advance the daily streak;
+    // every 7th consecutive day pays STREAK_BONUS_COINS, credited inside the
+    // same transaction as the quest's own coins so the balance stays exact.
+    let streak = 0;
+    let streakBonus = 0;
     const { scoreRow, newCoins } = await withTransaction(async (tx) => {
       const scoreRow = await insertScoreTx(tx, {
         userId: user.id, chapterId: chapter.id, rawScore: scaled, mistakes: opts.mistakes,
@@ -873,7 +1041,13 @@ export function createApiRouter(): Router {
         term: opts.term, coinsAwarded, coinsGathered: opts.coinsGathered, coinsPenalty, netCoins,
         failReason: opts.failReason,
       });
-      const newCoins = await applyCoinsTx(tx, user.id, netCoins);
+      let coins = await applyCoinsTx(tx, user.id, netCoins);
+      if (opts.failReason === null) {
+        const s = await updateStreak(user.id);
+        streak = s.streak;
+        streakBonus = s.bonusAwarded;
+        if (streakBonus > 0) coins = await applyCoinsTx(tx, user.id, streakBonus);
+      }
       const bookProgress = await getProgress(user.id, chapter.bookId);
       // Only a finished quest completes the chapter (and unlocks the next);
       // failed runs still add their score to the book's tally.
@@ -885,7 +1059,7 @@ export function createApiRouter(): Router {
         score: bookProgress.score + scaled,
         bestStreak: Math.max(bookProgress.bestStreak, opts.bestStreak),
       });
-      return { scoreRow, newCoins };
+      return { scoreRow, newCoins: coins };
     });
 
     // Fail-event log (score, gathered, penalty, net) — feed for a future
@@ -906,6 +1080,8 @@ export function createApiRouter(): Router {
       breakdown: result.breakdown,
       rank: rankForScore(await getTermScore(user.id, opts.term)),
       term: opts.term,
+      streak,
+      streakBonus,
     };
   }
 

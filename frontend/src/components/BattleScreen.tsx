@@ -13,6 +13,8 @@ interface Props {
   queue: Challenge[];
   /** Hearts the monster starts with (queue length). */
   maxHp: number;
+  /** Sprite slot of the monster being fought (theme roster may swap it). */
+  monsterSlot?: string;
   /** Player hearts (mirrored from the engine). */
   lives: number;
   /** Boss variant: bigger monster, level ends on victory. */
@@ -27,7 +29,12 @@ interface Props {
   onVictory: () => void;
 }
 
-export default function BattleScreen({ queue, maxHp, lives, boss = false, onDamage, onHit, onRetreat, onVictory }: Props) {
+export default function BattleScreen({ queue, maxHp, lives, boss = false, onDamage, onHit, onRetreat, onVictory, monsterSlot }: Props) {
+  // A theme's roster can swap the classic goblin for any sprite slot — but
+  // only if that slot actually rendered on the map (PNG exists on disk).
+  // Otherwise fall back to the classic monster art so battles never show a
+  // phantom slot.
+  const art = monsterSlot && spriteLoads(monsterSlot) ? monsterSlot : 'enemy_goblin';
   const [monsterHp, setMonsterHp] = useState(maxHp);
   const [qIndex, setQIndex] = useState(0);
   /** Remount counter: a fresh attempt at the same question after a wrong answer. */
@@ -95,7 +102,7 @@ export default function BattleScreen({ queue, maxHp, lives, boss = false, onDama
         <div style={{ textAlign: 'center' }}>
           <img
             key={hurt ? 'hurt' : 'ok'}
-            src={spriteDataUrl(hurt ? 'bookworm_hurt' : boss ? 'boss' : 'enemy_goblin')}
+            src={spriteDataUrl(hurt ? 'bookworm_hurt' : boss ? 'boss' : art)}
             alt={monsterName}
             style={{
               width: boss ? 96 : 72,
@@ -164,3 +171,12 @@ export default function BattleScreen({ queue, maxHp, lives, boss = false, onDama
     </div>
   );
 }
+
+/** True once the given slot's PNG is confirmed present on the server. */
+function spriteLoads(slot: string): boolean {
+  const probe = new Image();
+  probe.src = `/sprites/${slot}.png`;
+  return probe.complete && probe.naturalWidth > 0;
+}
+
+

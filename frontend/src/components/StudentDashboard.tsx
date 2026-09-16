@@ -68,11 +68,10 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   useEffect(() => onHudCoins((c) => setHudCoins(c)), []);
   // A fresh authoritative balance (quest payout, refetch) wins again.
   useEffect(() => { setHudCoins(null); }, [userProp.coins]);
-
-  // Streak chip updates when a quest completes (server-computed, bonus included).
-  const [questStreak, setQuestStreak] = useState<number | undefined>(undefined);
-  const [questStreakBonus, setQuestStreakBonus] = useState<number | undefined>(undefined);
-  // Notice board unread indicator (drives the HUD 📜! dot).
+  // Streak data from quest completion responses
+  const [questStreak, setQuestStreak] = useState<number | undefined>();
+  const [questStreakBonus, setQuestStreakBonus] = useState<number | undefined>();
+  // Announcements unread indicator
   const [hasUnreadAnnouncements, setHasUnreadAnnouncements] = useState(false);
 
   const refreshBooks = useCallback(async () => {
@@ -189,6 +188,13 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       }
       const bonus = result.streakBonus ? ` · 🔥 +${result.streakBonus} streak bonus` : '';
       setNotice(`Quest complete! +${result.rawScore} points · +${result.coinsAwarded} coins · Rank: ${result.rank}${bonus}`);
+      // Streak tracking
+      if (result.streak !== undefined) {
+        setQuestStreak(result.streak);
+        setQuestStreakBonus(result.streakBonus ?? 0);
+        // Reset after animation
+        setTimeout(() => { setQuestStreak(undefined); setQuestStreakBonus(undefined); }, 5000);
+      }
     },
     [book, user, onUserUpdated]
   );
@@ -345,7 +351,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
             </div>
           )}
 
-          {guild && !leads && (
+          {guild && (
             <RoyalGate feature="chat">
               <Announcements user={user} isTeacher={false} onUnreadChange={setHasUnreadAnnouncements} />
             </RoyalGate>
@@ -379,6 +385,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
               </button>
             </div>
           </div>
+
         </>
       )}
 
@@ -430,14 +437,15 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
         </RoyalGate>
       )}
 
-      {/* Floating chat pill on every view. While a quest/lesson runs it is
-          suppressed: nothing renders (no overlap with the game), messages
-          accrue as unread, and the pill returns with its badge afterwards. */}
-      {guild && !leads && (
+      {/* Floating chat pill on every view for any guild member. While a
+          quest/lesson runs it is suppressed: nothing renders (no overlap with
+          the game), messages accrue as unread, and the pill returns with its
+          badge afterwards. */}
+      {guild && (
         <RoyalGate feature="chat">
           <GuildChat
             user={user}
-            isTeacher={false}
+            isTeacher={leads}
             mode="pill"
             suppressAutoOpen={view.name === 'level' || view.name === 'lesson'}
           />

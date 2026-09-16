@@ -31,6 +31,8 @@ export interface BookMeta {
   /** 'general' (any subject) or 'programming' (code-flavored questions). */
   quizMode: QuizMode;
   createdAt: string;
+  /** Teacher-set quest cap; null/undefined = unlimited. */
+  questLimit?: number | null;
 }
 
 export interface ChapterMeta {
@@ -170,6 +172,17 @@ export interface ThemeMeta {
   id: string;
   name: string;
   builtin?: boolean;
+  /** Full palette for custom themes — present when not builtin. */
+  sky?: string;
+  stars?: string;
+  farHills?: string;
+  nearHills?: string;
+  pit?: string;
+  floorTop?: string;
+  floorBody?: string;
+  floorSpeckle?: string;
+  /** Patrol roster, if the theme defines one. */
+  monsters?: string[];
 }
 
 export interface MapResolve {

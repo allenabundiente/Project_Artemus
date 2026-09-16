@@ -169,6 +169,7 @@ export interface StreakInfo {
   lastActiveDate: string | null;
 }
 
+/** Get the user's current streak info. */
 export async function getStreak(): Promise<StreakInfo> {
   return get('/api/me/streak');
 }
@@ -294,6 +295,17 @@ export async function getProgress(bookId: string): Promise<Progress> {
   return get<Progress>(`/api/books/${bookId}/progress`);
 }
 
+/** Teacher quest rules for a tome: quest cap + availability window. */
+export interface BookRules {
+  questLimit: number | null;
+  availableFrom: string | null;
+  availableUntil: string | null;
+}
+
+export async function setBookRules(bookId: string, rules: Partial<BookRules>): Promise<{ ok: boolean; rules: BookRules }> {
+  return send(`/api/books/${bookId}/rules`, 'PUT', rules);
+}
+
 export async function saveProgress(bookId: string, p: Progress): Promise<Progress> {
   return send<Progress>(`/api/books/${bookId}/progress`, 'POST', p);
 }
@@ -387,6 +399,24 @@ export async function getAdminSprites(): Promise<{ manifest: Record<string, { wi
   return get('/api/admin/sprites');
 }
 
+/**
+ * Upload several PNG frames to new sprite slots (admin). Used for the Theme
+ * Forge's per-map swaps and the Animations studio alike. Rejects as soon as
+ * one upload fails so callers can surface a clean error.
+ */
+export async function uploadSpriteFrames(
+  slots: string[],
+  files: File[],
+): Promise<{ uploaded: string[] }> {
+  if (slots.length !== files.length) throw new Error('slot/file count mismatch');
+  const uploaded: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    await uploadSprite(slots[i], files[i]);
+    uploaded.push(slots[i]);
+  }
+  return { uploaded };
+}
+
 // --- admin: admin account management -------------------------------------------------
 
 export async function getAdminAccounts(): Promise<{ admins: AdminAccount[] }> {
@@ -445,6 +475,29 @@ export async function deleteAnimation(name: string): Promise<{ ok: boolean }> {
 
 // --- admin: custom map themes ---------------------------------------------------------
 
+/** One admin-defined map theme, exactly as persisted in custom-themes.json. */
+export interface CustomThemeFull {
+  id: string;
+  name: string;
+  sky: string;
+  stars: string;
+  farHills: string;
+  nearHills: string;
+  pit: string;
+  floorTop: string;
+  floorBody: string;
+  floorSpeckle: string;
+  hpFilled: string;
+  hpEmpty: string;
+  torchPole?: string;
+  torchSconce?: string;
+  particleHit?: string;
+  particleScore?: string;
+  dustColor?: string;
+  monsters?: string[];
+  spriteOverrides?: Record<string, string>;
+}
+
 export interface CustomThemePayload {
   name: string;
   sky: string;
@@ -489,3 +542,29 @@ export async function createShopItem(item: Omit<ShopItem, 'id'>): Promise<ShopIt
 export async function deleteShopItem(id: string): Promise<{ ok: boolean }> {
   return send(`/api/admin/shop/${id}`, 'DELETE');
 }
+
+// --- guild chat ------------------------------------------------------------------
+// Polling-based MVP: clients poll every few seconds for new messages.
+// TODO: upgrade to Supabase Realtime for true push notifications.
+
+export interface ChatMessage {
+  id: string;
+  guildId: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  avatar: Record<string, unknown>;
+  rank: string;
+  message: string;
+  createdAt: string;
+}
+
+
+// --- streaks ---------------------------------------------------------------------
+
+export interface StreakInfo {
+  currentStreak: number;
+  longestStreak: number;
+  lastActiveDate: string | null;
+}
+

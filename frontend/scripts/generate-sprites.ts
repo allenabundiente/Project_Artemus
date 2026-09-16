@@ -78,6 +78,23 @@ for (const sprite of allSprites) {
   const { width, height } = renderGrid(sprite.grid);
   manifest[sprite.name] = { width, height, gridFallback: true };
 }
+// Custom uploads (Theme Forge sprite swaps, animation frames) also belong in
+// the manifest — the runtime loader only fetches manifest-listed slots. Probe
+// the sprite dir for PNGs that no grid slot already covers.
+const onDisk = fs.existsSync(outDir)
+  ? fs.readdirSync(outDir).filter((f) => f.endsWith('.png')).map((f) => f.replace(/\.png$/, ''))
+  : [];
+const known = new Set(allSprites.map((s) => s.name));
+let customCount = 0;
+for (const slot of onDisk) {
+  if (known.has(slot)) continue;
+  const bytes = fs.readFileSync(path.join(outDir, `${slot}.png`));
+  // IHDR: 4-byte length, 'IHDR', then width/height as big-endian uint32s.
+  const width = bytes.readUInt32BE(16);
+  const height = bytes.readUInt32BE(20);
+  manifest[slot] = { width, height, gridFallback: false };
+  customCount += 1;
+}
 fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-console.log(`wrote manifest.json (${Object.keys(manifest).length} slots)`);
+console.log(`wrote manifest.json (${Object.keys(manifest).length} slots, ${customCount} custom uploads)`);
 console.log(`done -> ${outDir}`);

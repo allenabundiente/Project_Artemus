@@ -684,7 +684,9 @@ export class ArcadeEngine {
         const hop = anim.loop && wrapPhase < 1 ? -1 : 0;
         my = groundTop - 16 + hop;
         const frameName = anim.frames[fi];
-        const img = this.sprites[frameName];
+        // Theme sprite swaps apply to animation frames too (e.g. a volcano
+        // dragon whose flap frames were replaced per-map).
+        const img = this.sprites[this.theme.spriteOverrides?.[frameName] ?? frameName];
         if (img && img.complete) {
           c.drawImage(img, mx, Math.round(my));
         } else {

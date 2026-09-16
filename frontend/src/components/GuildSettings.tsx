@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../api';
-import type { LlmStatus, Term, TermSettings } from '../types';
+import type { LlmStatus, Term, TermSettings, ThemeMeta } from '../types';
+import ThemeCard from './ThemeCard';
 
 interface Props {
   onSaved: () => void;
@@ -33,6 +34,8 @@ export default function GuildSettings({ onSaved, guildId }: Props) {
   const [themes, setThemes] = useState<{ id: string; name: string }[]>([]);
   const [mapTheme, setMapTheme] = useState<string | null>(null);
   const [mapSaved, setMapSaved] = useState(false);
+  // Theme browser: show every realm with a preview card when opened.
+  const [browseAll, setBrowseAll] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -305,10 +308,12 @@ export default function GuildSettings({ onSaved, guildId }: Props) {
       <div className="pixel-panel" style={{ marginTop: '1rem' }}>
         <p className="pixel-font" style={{ fontSize: '0.75rem', margin: '0 0 0.25rem' }}>🗺 MAP SKIN</p>
         <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0 0 0.6rem' }}>
-          Choose the realm your students quest in. "Follow the crown" uses the admin's global
-          config (which may randomize by difficulty).
+          Browse every realm and pick the one your students quest in. "Follow the crown" uses
+          the admin's global config (which may randomize by difficulty).
         </p>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+
+        {/* Browse/preview all themes; the classic select stays for quick switching. */}
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.75rem' }}>
           <select
             className="pixel-select"
             value={mapTheme ?? ''}
@@ -317,8 +322,26 @@ export default function GuildSettings({ onSaved, guildId }: Props) {
             <option value="">👑 Follow the crown (admin config)</option>
             {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
+          <button
+            className="pixel-btn pixel-btn--ghost"
+            style={{ fontSize: '0.6rem' }}
+            onClick={() => setBrowseAll((v) => !v)}
+          >
+            {browseAll ? '◀ SHOW MY GUILD CHOICE' : `BROWSE ALL (${themes.length})`}
+          </button>
           {mapSaved && <span className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-gold)' }}>Saved!</span>}
         </div>
+
+        {(browseAll || mapTheme) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '0.6rem' }}>
+            {browseAll
+              ? themes.map((t) => <ThemeCard key={t.id} theme={t} selected={mapTheme === t.id} onPick={() => void saveMap(t.id)} />)
+              : (() => {
+                  const t = themes.find((x) => x.id === mapTheme);
+                  return t ? <ThemeCard theme={t} selected onPick={() => void saveMap(t.id)} /> : null;
+                })()}
+          </div>
+        )}
       </div>
       )}
     </div>

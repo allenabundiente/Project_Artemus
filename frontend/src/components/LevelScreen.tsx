@@ -6,7 +6,7 @@ import { loadSprites, spriteDataUrl } from '../game/sprites';
 import { getAnimations, loadExtraSprites } from '../game/animations';
 import { dealQuestPlan, type QuestPlan } from '../game/questPlan';
 import { sfx } from '../game/sfx';
-import { loadCustomThemes } from '../game/themes';
+import { loadCustomThemes, resolveTheme } from '../game/themes';
 import BattleScreen from './BattleScreen';
 import TouchControls from './TouchControls';
 import LandscapeHint from './LandscapeHint';
@@ -64,6 +64,8 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   const [failOutcome, setFailOutcome] = useState<FailOutcome | null>(null);
   const [failError, setFailError] = useState<string | null>(null);
   const termSettingsRef = useRef<{ timeLimitSeconds: number } | null>(null);
+  /** Sprite slot of the monster the player is currently battling. */
+  const fightingSlotRef = useRef<string>('enemy_goblin');
   // Touch devices (phones/tablets) get the on-screen D-pad; desktops with a
   // fine pointer keep keyboard-only and never see the pad.
   const [isTouch, setIsTouch] = useState(false);
@@ -112,10 +114,16 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         const urlTheme = new URLSearchParams(window.location.search).get('theme');
         const themeId = urlTheme
           ?? await api.resolveMap(chapterId, termInfo.settings.monsterDifficulty).then((r) => r.theme).catch(() => undefined);
+        const resolvedTheme = resolveTheme(themeId);
+        // The monster the player is actually fighting (theme rosters can swap
+        // the classic goblin per map) — battles show its art, swapped too.
+        const fightingSlot = (i: number) =>
+          resolvedTheme.monsters?.[i % (resolvedTheme.monsters.length || 1)] ?? 'enemy_goblin';
         const engine = new ArcadeEngine(canvas, layout, sprites, {
           onMonsterHit: (i) => {
             setBattleMonster(i);
             setBattleKey((k) => k + 1);
+            fightingSlotRef.current = fightingSlot(i);
             setBattleMaxHp(engineRef.current?.getMonsterHp(i) ?? 1);
             setPhase('battle');
           },
@@ -137,6 +145,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         avatar ? { ...avatar } : undefined,
         animations);
         engineRef.current = engine;
+        fightingSlotRef.current = 'enemy_goblin';
         setTimeLeft(termInfo.settings.timeLimitSeconds);
         setPhase('playing');
         engine.start();

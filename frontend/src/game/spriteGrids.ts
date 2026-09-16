@@ -35,6 +35,11 @@ export const PALETTE: Record<string, [number, number, number]> = {
   H: [0x00, 0xe4, 0x36], // recolorable LIGHT garment zone
   h: [0x00, 0x8a, 0x22], // recolorable SHADE garment zone
   S: [0xd8, 0xb9, 0x8a], // skin (same tone as 'c', named for avatar grids)
+  // Lava realm (Volcano Caldera): molten rock + ember fire palette.
+  f: [0xe2, 0x53, 0x1f], // lava flow orange-red
+  F: [0xff, 0xd2, 0x1e], // molten bright yellow
+  R: [0x5a, 0x18, 0x14], // cooled lava crust dark red
+  E: [0xff, 0x9d, 0x3a], // ember glow orange
 };
 
 export interface SpriteDef {
@@ -421,6 +426,46 @@ export const SPRITES: SpriteDef[] = [
     ],
   },
   {
+    // Ember imp — the lava realm's small fiend. Molten cracks over cooled
+    // crust skin, little horns, glowing eyes. Same 32×32 footprint as the
+    // other patrol monsters.
+    name: 'enemy_ember',
+    grid: [
+      '................................',
+      '................................',
+      '................................',
+      '.....k..............k...........',
+      '....kEk............kEk..........',
+      '....kRRk..........kRRk..........',
+      '.....kRRk........kRRk...........',
+      '......kRRRkkkkkkRRRk............',
+      '.....kRRRRRRRRRRRRRRk...........',
+      '....kRRRRRRRRRRRRRRRRRk.........',
+      '....kRFFwwRRRRRRwwFFRRk.........',
+      '....kRFwFwRRRRRRwFwFRRk.........',
+      '....kRkkkRRRRRRRRkkkRRk.........',
+      '....kRRRRRRRRRRRRRRRRRk.........',
+      '.....kRRRRRkkkkRRRRRRk..........',
+      '......kkRRRRRRRRRRRkk...........',
+      '.....kRRRfRRRRRRfRRRRk..........',
+      '....kRRRffRRRRRRffRRRRk.........',
+      '....kRRfffRRRRRRfffRRRk.........',
+      '....kRRffRRRRRRRRffRRRk.........',
+      '.....kRRRRRRRRRRRRRRk...........',
+      '......kRRRRkkkkkRRRRk...........',
+      '.....kRRRk.......kRRRk..........',
+      '....kRRk...........kRRk.........',
+      '....kk...............kk.........',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+    ],
+  },
+  {
     // Cave bat monster — 2× detail pass.
     name: 'enemy_bat',
     grid: [
@@ -532,6 +577,89 @@ export const SPRITES: SpriteDef[] = [
       '................................',
       '................................',
       '................................',
+    ],
+  },
+  {
+    // Lava dragon — the Volcano Caldera map's signature monster. Obsidian
+    // scales over molten cracks, horned head, glowing eyes and a fire-crest
+    // back. A hand-drawn PNG also ships in public/sprites/; this grid is the
+    // canonical fallback (same 32×32 footprint).
+    name: 'lava_dragon',
+    grid: [
+      '................................',
+      '....k.......................k...',
+      '...kfk.....................kfk..',
+      '...kRRk...................kRRk..',
+      '...kRRRkkkkkkkkkkkkkkkkkkRRRk...',
+      '...kRRRRRRRRRRRRRRRRRRRRRRRk....',
+      '....kRRRwwRRRRRRRRRRwwRRRk......',
+      '....kRRwFwRRRRRRRRRwFwRRk.......',
+      '....kRRkkRRRRRRRRRRkkRRk........',
+      '...kRRRRRRRRRRRRRRRRRRRRk.......',
+      '...kRRRRRRRRRRRRRRRRRRRRRRk.....',
+      '..kRRRRRRRRRRRffRRRRRRRRRRk.....',
+      '..kRRkRRRRRRRffffRRRRRRkRRk.....',
+      '..kRRkRRRRRRRffffRRRRRRkRRk.....',
+      '..kRRkRRRRRRRRffRRRRRRRkRRk.....',
+      '..kRRRRRRRRRRRRRRRRRRRRRRRk.....',
+      '...kRRRRRRRRRRRRRRRRRRRRRk......',
+      '...kRRRRRRRkRRRRRRkRRRRRRk......',
+      '....kkRRRRkRRRRRRkRRRRkk........',
+      '......kRRRkkRRRRkkRRRk..........',
+      '.....kRRRRkkkkkkkkRRRRk.........',
+      '....kRRRk..........kRRRk........',
+      '...kRRk..............kRRk.......',
+      '...kkk................kkk.......',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+      '................................',
+    ],
+  },
+  {
+    // LAVA DRAGON BOSS — the Volcano Caldera's end-of-level tyrant. A giant
+    // front-facing dragon: spread bat wings, horned head with molten eyes,
+    // obsidian scales cracked open by flowing magma, clawed chest. Fills the
+    // 32×32 frame edge-to-edge (the boss renders at 96px — 3× the regular
+    // monster) with the same palette as the regular lava dragon.
+    name: 'lava_dragon_boss',
+    grid: [
+      '....k..............k............',
+      '....kk............kk............',
+      '....kEk..k......k..kEk..........',
+      '....kRRk.kEk..kEk.kRRk..........',
+      '....kRRRkRRk..kRRkRRRk..........',
+      '.....kRRRRRkfkRRRRRk............',
+      '.....kRRRRRRRRRRRRk.............',
+      '....kRRRRRRRRRRRRRRk............',
+      '....kRRwwRRRRRRRRwwRk...........',
+      '....kRwFwRRRRRRRRwFwRk..........',
+      '....kRkkRRRRRRRRRRkkRk..........',
+      '...kRRRRRRRRRRRRRRRRRRk.........',
+      '..kRRkRRRRkRRRRRRkRRRRk.........',
+      '..kRRkRRRkRRkRRkRRkRRRk.........',
+      '..kRRkRRRRkRRRRRRkRRRRk.........',
+      '..kRRRRRRRRRfffRRRRRRRRk........',
+      '.kRRRRRRRRRfffffRRRRRRRRk.......',
+      'kRRkRRRRRRRRfffRRRRRRRkRRk......',
+      'kRRkRRRRRRRRRRRRRRRRRRkRRk......',
+      'kRRkRRRRRRRRRRRRRRRRRRkRRk......',
+      'kRRRRRRRRRRkRRRRkRRRRRRRRk......',
+      '.kRRRRRRRRkRRRRRRkRRRRRRk.......',
+      '.kRRRRRRRkRRRRRRRRkRRRRRk.......',
+      '..kRRRRRRRRRRRRRRRRRRRRk........',
+      '..kRRRRkRRRRRRRRRRRRkRRk........',
+      '...kRRRkRRRRRRRRRRRRkRRk........',
+      '...kRRRRkRRRRRRRRRRkRRRRk.......',
+      '....kkRRRkkkRRRRkkkRRRkk........',
+      '......kRRk..kRRk..kRRk..........',
+      '.....kRRk...kRRk...kRRk.........',
+      '....kRRk....kRRk....kRRk........',
+      '...kkk......kkk......kkk........',
     ],
   },
   {

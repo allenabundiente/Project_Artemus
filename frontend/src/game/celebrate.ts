@@ -68,6 +68,100 @@ function playFanfare(mode: ChestTier['sfxMode']): void {
   sfx.victory();
 }
 
+/**
+ * 7-DAY STREAK BONUS — the daily-flame milestone payout. Shares the purchase
+ * celebration's coin fountain and HUD bump, but the banner reads like the
+ * kingdom itself noticed: a flame medallion instead of a chest, and the coin
+ * count scales with the streak length paying out.
+ *
+ * Fired from the quest-complete flow when the server reports streakBonus > 0.
+ * Fire-and-forget, self-cleaning, reduced-motion aware — same contract as
+ * celebratePurchase.
+ */
+export function celebrateStreakBonus(opts: { streak: number; bonus: number; balance: number }): void {
+  if (typeof document === 'undefined') return;
+
+  bumpHudCoins(opts.balance);
+  if (REDUCED) {
+    sfx.victory();
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'celebrate-overlay';
+
+  const panel = document.createElement('div');
+  panel.className = 'celebrate-panel';
+
+  const flame = document.createElement('div');
+  flame.className = 'celebrate-chest celebrate-flame';
+  flame.textContent = '🔥';
+
+  const banner = document.createElement('div');
+  banner.className = 'celebrate-banner';
+
+  const heading = document.createElement('p');
+  heading.className = 'celebrate-heading';
+  heading.textContent = `${opts.streak}-DAY STREAK!`;
+
+  const sub = document.createElement('p');
+  sub.className = 'celebrate-sub';
+  sub.textContent = `Your daily flame earns ${opts.bonus} bonus coins.`;
+
+  banner.append(heading, sub);
+  panel.append(flame, banner);
+  overlay.append(panel);
+  document.body.append(overlay);
+
+  sfx.coin();
+  window.setTimeout(() => sfx.select(), 180);
+  window.setTimeout(() => sfx.victory(), 420);
+
+  // Coin fountain from the flame — a modest burst, then a second wave, since
+  // this payout is pure bonus on top of the quest's own treasure.
+  const coins: Coin[] = [];
+  const spawn = (count: number) => {
+    for (let i = 0; i < count; i++) {
+      const c = makeCoin();
+      const side = i % 2 === 0 ? 1 : -1;
+      c.vx = side * (40 + Math.random() * 130);
+      c.vy = -(240 + Math.random() * 200);
+      c.vr = side * (180 + Math.random() * 240);
+      c.el.style.left = '50%';
+      panel.append(c.el);
+      coins.push(c);
+    }
+  };
+  spawn(24);
+  window.setTimeout(() => spawn(16), 380);
+
+  const GRAVITY = 900;
+  let last = performance.now();
+  let running = true;
+  const step = (now: number) => {
+    if (!running) return;
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    for (const c of coins) {
+      c.vy += GRAVITY * dt;
+      c.x += c.vx * dt;
+      c.y += c.vy * dt;
+      c.rot += c.vr * dt;
+      c.el.style.transform = `translate(${c.x}px, ${c.y}px) rotate(${c.rot}deg)`;
+    }
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+
+  const dismiss = () => {
+    running = false;
+    overlay.classList.add('celebrate-out');
+    window.setTimeout(() => overlay.remove(), 260);
+  };
+  overlay.addEventListener('click', dismiss);
+  window.setTimeout(dismiss, 2800);
+}
+
 export function celebratePurchase(opts: { itemName: string; price: number; coins: number }): void {
   if (typeof document === 'undefined') return;
   const tier = tierFor(opts.price);

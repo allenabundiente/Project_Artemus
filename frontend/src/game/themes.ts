@@ -42,6 +42,12 @@ export interface Theme {
   /** Which monster sprites patrol the level, cycling by monster index. */
   monsters?: string[];
   /**
+   * End-of-level boss sprite slot. Defaults to the dungeon brute ('boss')
+   * when unset — themed maps swap in their own tyrant (the caldera's giant
+   * lava dragon, etc.). Battles render its art + roster name.
+   */
+  boss?: string;
+  /**
    * Sprite-slot overrides: slot name → PNG filename (from the manifest) that
    * replaces it in this theme — e.g. { castle_gate: 'exit_crystal' }.
    */
@@ -82,7 +88,32 @@ export const FOREST: Theme = {
   torchSconce: '#2a1f14',
 };
 
-export const THEMES: Theme[] = [DUNGEON, FOREST];
+export const LAVA: Theme = {
+  id: 'lava',
+  name: 'Volcano Caldera',
+  sky: '#1c0b08',
+  stars: '#ffb26b', // drifting embers, not stars
+  farHills: '#4a1410', // distant volcano ridges
+  nearHills: '#2e0d0a', // cooled black-rock slope
+  pit: '#150302', // fissure darkness
+  floorTop: '#e2531f', // molten crust lip
+  floorBody: '#3a120c', // charred rock body
+  floorSpeckle: '#5a1814', // cooled lava crust speckle
+  hpFilled: '#a82a2a',
+  hpEmpty: '#5a1814',
+  particleHit: '#ffd21e', // molten sparks
+  particleScore: '#ff9d3a', // ember bursts
+  dustColor: 'rgba(255, 157, 58, 0.55)', // kicked-up embers
+  torchPole: '#2e1209',
+  torchSconce: '#1f0d06',
+  // The caldera's own bestiary: ember imps and lava dragons (canonical
+  // sprites with grid fallbacks, so they render even if a PNG goes missing).
+  monsters: ['enemy_ember', 'lava_dragon', 'enemy_ember', 'enemy_slime'],
+  // The gate to the caldera's heart wakes the giant lava dragon.
+  boss: 'lava_dragon_boss',
+};
+
+export const THEMES: Theme[] = [DUNGEON, FOREST, LAVA];
 
 /**
  * Register admin-defined custom themes (fetched from /api/themes) into the
@@ -91,7 +122,7 @@ export const THEMES: Theme[] = [DUNGEON, FOREST];
  */
 export function registerCustomThemes(list: ({ id: string; name: string } & Partial<Theme>)[]): void {
   for (const raw of list) {
-    if (!raw?.id || ['dungeon', 'forest'].includes(raw.id)) continue;
+    if (!raw?.id || ['dungeon', 'forest', 'lava'].includes(raw.id)) continue;
     const theme: Theme = {
       id: raw.id,
       name: raw.name ?? raw.id,
@@ -111,6 +142,7 @@ export function registerCustomThemes(list: ({ id: string; name: string } & Parti
       particleScore: raw.particleScore,
       dustColor: raw.dustColor,
       monsters: Array.isArray(raw.monsters) && raw.monsters.length > 0 ? raw.monsters : undefined,
+      boss: typeof raw.boss === 'string' && raw.boss.trim() ? raw.boss.trim() : undefined,
       spriteOverrides: raw.spriteOverrides,
     };
     const i = THEMES.findIndex((t) => t.id === theme.id);

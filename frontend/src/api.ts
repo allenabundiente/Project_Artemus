@@ -37,8 +37,18 @@ async function json<T>(res: Response): Promise<T> {
     try {
       const body = await res.json();
       if (body?.error) message = body.error;
-    } catch { /* ignore */ }
-    throw new Error(message);
+    } catch {
+      // HTML/plain errors (proxies, gateways, timeouts) carry no JSON — give
+      // the teacher/player something actionable instead of a naked status.
+      if (res.status === 502 || res.status === 504) {
+        message = 'The server took too long to answer — please try again in a moment.';
+      } else if (res.status === 503) {
+        message = 'The server is briefly unavailable (it may be waking up) — please try again.';
+      }
+    }
+    const err = new Error(message) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
   return res.json() as Promise<T>;
 }
@@ -167,11 +177,38 @@ export interface StreakInfo {
   currentStreak: number;
   longestStreak: number;
   lastActiveDate: string | null;
+  /** Streak ≥1, no quest today, and the evening has begun — show the reminder. */
+  atRisk?: boolean;
 }
 
 /** Get the user's current streak info. */
 export async function getStreak(): Promise<StreakInfo> {
   return get('/api/me/streak');
+}
+
+/** One quested day of the streak calendar; milestone = a 7-day bonus day. */
+export interface StreakCalendarDay {
+  date: string; // YYYY-MM-DD (UTC day with a finished quest)
+  milestone: boolean;
+}
+
+/** Quested-day history for the streak calendar. */
+export async function getStreakCalendar(): Promise<{ days: StreakCalendarDay[] }> {
+  return get('/api/me/streak/calendar');
+}
+
+export interface GuildStreakEntry {
+  userId: string;
+  name: string;
+  currentStreak: number;
+  longestStreak: number;
+  questedToday: boolean;
+  avatar: Record<string, unknown>;
+}
+
+/** Guild streak standings (current vs longest, quested-today flag). */
+export async function getGuildStreaks(): Promise<{ guildId: string; entries: GuildStreakEntry[] }> {
+  return get('/api/guilds/mine/streaks');
 }
 
 // --- guild member management (teacher) ----------------------------------------------
@@ -246,8 +283,12 @@ export async function setBookQuestCount(bookId: string, questCount: number | nul
   });
 }
 
-/** Wipe a book's challenges so the next generate() rebuilds them. */
-export async function regenerateBook(bookId: string): Promise<{ ok: boolean }> {
+/**
+ * Wipe a book's challenges so the next generate() rebuilds them.
+ * (Legacy no-op wipe — regeneration now replaces per chapter in one call
+ * via generateChallenges, which also reports what it did.)
+ */
+export async function regenerateBook(bookId: string): Promise<{ ok: boolean; challengeCount?: number; note?: string }> {
   return send(`/api/books/${bookId}/regenerate`, 'POST');
 }
 

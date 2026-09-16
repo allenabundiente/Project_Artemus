@@ -104,6 +104,11 @@ export default function Shop({ user, onUserUpdated }: Props) {
 
   const categories: ShopItem['category'][] = ['hair', 'armor', 'helmet', 'cape', 'pack'];
 
+  // First paint on slow phones: the fetch hasn't landed yet. Render a skeleton
+  // with the real panel chrome instead of collapsing to just the header (the
+  // old flash: header → full list a beat later = layout jump).
+  const loaded = items.length > 0;
+
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>
       <div className="pixel-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -122,6 +127,14 @@ export default function Shop({ user, onUserUpdated }: Props) {
 
       {error && <p className="error-text">{error}</p>}
       {notice && <p className="status-text">{notice}</p>}
+
+      {!loaded && (
+        <div className="pixel-panel shop-skeleton" style={{ marginBottom: '1rem' }} aria-busy="true">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="shop-skeleton__row" />
+          ))}
+        </div>
+      )}
 
       {categories.map((cat) => {
         const list = items.filter((i) => i.category === cat);

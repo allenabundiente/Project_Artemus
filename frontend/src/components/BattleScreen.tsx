@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Challenge } from '../types';
 import { sfx } from '../game/sfx';
-import { spriteDataUrl } from '../game/sprites';
+import { spriteDataUrl, isCanonicalSprite } from '../game/sprites';
 import ChallengeDialog from './ChallengeDialog';
 
 interface Props {
@@ -30,23 +30,37 @@ interface Props {
 }
 
 export default function BattleScreen({ queue, maxHp, lives, boss = false, onDamage, onHit, onRetreat, onVictory, monsterSlot }: Props) {
-  // A theme's roster can swap the classic goblin for any sprite slot — but
-  // only if that slot actually rendered on the map (PNG exists on disk).
-  // Otherwise fall back to the classic monster art so battles never show a
-  // phantom slot.
-  const art = monsterSlot && spriteLoads(monsterSlot) ? monsterSlot : 'enemy_goblin';
+  // A theme's roster can swap the classic goblin for any sprite slot. Slots
+  // with a canonical grid (goblin, slime, bat, EMBER, LAVA DRAGON…) always
+  // render via spriteDataUrl's rasterizer — no phantom risk. Custom uploads
+  // are probed asynchronously; until the probe lands we show the classic art
+  // (the old synchronous `new Image()` probe was NEVER complete on first
+  // paint, so the battle flashed goblin → real monster on every encounter).
+  const canonical = !!monsterSlot && isCanonicalSprite(monsterSlot);
+  useSpriteProbe(monsterSlot, canonical);
+  const art = monsterSlot && (canonical || spriteLoads(monsterSlot)) ? monsterSlot : 'enemy_goblin';
   const [monsterHp, setMonsterHp] = useState(maxHp);
   const [qIndex, setQIndex] = useState(0);
   /** Remount counter: a fresh attempt at the same question after a wrong answer. */
   const [attempt, setAttempt] = useState(0);
   const [hurt, setHurt] = useState(false);
   const [victory, setVictory] = useState(false);
-  const [message, setMessage] = useState(
-    boss ? 'THE DUNGEON BOSS AWAKENS!' : 'A GOBLISH MONSTER BLOCKS YOUR PATH!'
-  );
-
-  const monsterName = boss ? 'DUNGEON BOSS' : 'MONSTER';
+  // Battle copy follows the theme roster, not just the art.
+  const monsterName = boss
+    ? monsterSlot === 'lava_dragon_boss'
+      ? 'LAVA DRAGON'
+      : 'DUNGEON BOSS'
+    : art === 'enemy_ember' ? 'EMBER IMP'
+    : art === 'lava_dragon' ? 'LAVA DRAGON'
+    : art === 'enemy_slime' ? 'SLIME'
+    : art === 'enemy_bat' ? 'CAVE BAT'
+    : 'MONSTER';
   const challenge = queue[Math.min(qIndex, queue.length - 1)];
+  const [message, setMessage] = useState(
+    boss
+      ? monsterSlot === 'lava_dragon_boss' ? 'THE LAVA DRAGON AWAKENS!' : 'THE DUNGEON BOSS AWAKENS!'
+      : `${monsterName} BLOCKS YOUR PATH!`
+  );
 
   function handleResult(correct: boolean) {
     if (correct) {
@@ -67,7 +81,11 @@ export default function BattleScreen({ queue, maxHp, lives, boss = false, onDama
       }
     } else {
       onDamage(); // engine plays the hit sound + updates hearts
-      setMessage(boss ? 'THE DUNGEON BOSS BITES BACK!' : 'THE MONSTER BITES!');
+      setMessage(
+        boss
+          ? monsterSlot === 'lava_dragon_boss' ? 'THE LAVA DRAGON BITES BACK!' : 'THE DUNGEON BOSS BITES BACK!'
+          : `${monsterName} BITES!`
+      );
     }
   }
 
@@ -84,7 +102,7 @@ export default function BattleScreen({ queue, maxHp, lives, boss = false, onDama
   return (
     <div className="dialog-box" style={{ maxWidth: 660, margin: '0 auto' }}>
       <div className="pixel-font" style={{ fontSize: '0.6rem', color: boss ? 'var(--p-red)' : 'var(--p-pink)', marginBottom: '0.5rem' }}>
-        {boss ? '⚠ DUNGEON BOSS' : '⚔ MONSTER BATTLE'}
+        {boss ? (monsterSlot === 'lava_dragon_boss' ? '⚠ LAVA DRAGON' : '⚠ DUNGEON BOSS') : '⚔ MONSTER BATTLE'}
       </div>
 
       {/* monster stage */}
@@ -102,13 +120,15 @@ export default function BattleScreen({ queue, maxHp, lives, boss = false, onDama
         <div style={{ textAlign: 'center' }}>
           <img
             key={hurt ? 'hurt' : 'ok'}
-            src={spriteDataUrl(hurt ? 'bookworm_hurt' : boss ? 'boss' : art)}
+            src={spriteDataUrl(hurt && art === 'enemy_goblin' && !boss ? 'bookworm_hurt' : boss ? (monsterSlot ?? 'boss') : art)}
             alt={monsterName}
             style={{
               width: boss ? 96 : 72,
               height: boss ? 96 : 72,
               imageRendering: 'pixelated',
-              transform: hurt ? 'translateX(4px)' : undefined,
+              // Themed monsters/bosses shake in place (no hurt frames exist
+              // for them); only the classic goblin swaps to its comic face.
+              transform: hurt ? (boss || art !== 'enemy_goblin' ? 'translateX(6px) scale(0.96)' : 'translateX(4px)') : undefined,
             }}
           />
           <div className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-peach)', marginTop: '0.3rem' }}>
@@ -177,6 +197,23 @@ function spriteLoads(slot: string): boolean {
   const probe = new Image();
   probe.src = `/sprites/${slot}.png`;
   return probe.complete && probe.naturalWidth > 0;
+}
+
+/**
+ * Re-render once custom-slot PNG probes settle, so a battle that started on
+ * the fallback art swaps to the real (admin-uploaded) monster when it loads.
+ * Canonical-grid slots skip this entirely — they render synchronously.
+ */
+function useSpriteProbe(slot: string | undefined, canonical: boolean): void {
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!slot || canonical) return;
+    let alive = true;
+    const probe = new Image();
+    probe.onload = () => { if (alive) force((n) => n + 1); };
+    probe.src = `/sprites/${slot}.png`;
+    return () => { alive = false; };
+  }, [slot, canonical]);
 }
 
 

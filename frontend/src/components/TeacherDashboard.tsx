@@ -127,7 +127,16 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       const gen = await api.generateChallenges(up.bookId, term);
       const modeNote = up.quizMode === 'programming' ? ' programming mode' : up.quizMode === 'language' ? ' language mode' : '';
       const questNote = questChapters ? `${questChapters} long quest${questChapters === 1 ? '' : 's'}` : `${up.chapters.length} quests (auto)`;
-      setNotice(`"${up.title}" is ready — ${questNote}, ${gen.challengeCount} monsters (${gen.mode} mode${modeNote}).`);
+      if (gen.challengeCount === 0) {
+        // Say the failure plainly — this tome would have shown up as
+        // "no monsters" for every student.
+        setError(
+          `"${up.title}" uploaded, but monster summoning failed this run. The tome is empty — press ⟳ on it below to retry (retrying is safe; the old quests are kept if it fails again).`
+        );
+      } else {
+        const warn = gen.llmFailures > 0 ? ` (⚠ ${gen.llmFailures} quest${gen.llmFailures === 1 ? '' : 's'} used the fallback summoner)` : '';
+        setNotice(`"${up.title}" is ready — ${questNote}, ${gen.challengeCount} monsters (${gen.mode} mode${modeNote})${warn}.`);
+      }
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -144,9 +153,12 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     setBusy(`Re-summoning "${book.title}"…`);
     try {
       await api.setBookQuestCount(book.id, next);
-      await api.regenerateBook(book.id);
-      const gen = await api.generateChallenges(book.id, term);
-      setNotice(`"${book.title}" now holds ${gen.challengeCount} monsters.`);
+      const gen = await api.generateChallenges(book.id, term, next);
+      if (gen.challengeCount === 0) {
+        setError(`"${book.title}" could not be re-summoned this run — its previous quests were kept. Try again in a moment.`);
+      } else {
+        setNotice(`"${book.title}" now holds ${gen.challengeCount} monsters.`);
+      }
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -163,9 +175,12 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     setBusy(`Reshaping "${book.title}"…`);
     try {
       await api.setBookQuestCount(book.id, book.questCount, undefined, next);
-      await api.regenerateBook(book.id);
-      const gen = await api.generateChallenges(book.id, term);
-      setNotice(`"${book.title}" now offers ${next ?? 'auto'} quest${(next ?? 2) === 1 ? '' : 's'} — ${gen.challengeCount} monsters.`);
+      const gen = await api.generateChallenges(book.id, term, book.questCount ?? undefined);
+      if (gen.challengeCount === 0) {
+        setError(`"${book.title}" could not be reshaped this run — its previous quests were kept. Try again in a moment.`);
+      } else {
+        setNotice(`"${book.title}" now offers ${next ?? 'auto'} quest${(next ?? 2) === 1 ? '' : 's'} — ${gen.challengeCount} monsters.`);
+      }
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -231,9 +246,12 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     setBusy(`Re-summoning "${book.title}"…`);
     try {
       await api.setBookQuestCount(book.id, book.questCount, next);
-      await api.regenerateBook(book.id);
-      const gen = await api.generateChallenges(book.id, term);
-      setNotice(`"${book.title}" re-summoned in ${next} mode — ${gen.challengeCount} monsters.`);
+      const gen = await api.generateChallenges(book.id, term, book.questCount ?? undefined);
+      if (gen.challengeCount === 0) {
+        setError(`"${book.title}" could not be re-summoned this run — its previous quests were kept. Try again in a moment.`);
+      } else {
+        setNotice(`"${book.title}" re-summoned in ${next} mode — ${gen.challengeCount} monsters.`);
+      }
       await refreshGuildData();
     } catch (e) {
       setError((e as Error).message);
@@ -417,6 +435,9 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                           )}
                           {b.locked && (
                             <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-red)' }} title="Locked">🔒</span>
+                          )}
+                          {b.challengeCount === 0 && (
+                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-red)' }} title="No monsters — press ⟳ to regenerate">⚠ 0</span>
                           )}
                         </div>
                         {expanded && (

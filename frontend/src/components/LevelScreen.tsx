@@ -119,6 +119,9 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         // the classic goblin per map) — battles show its art, swapped too.
         const fightingSlot = (i: number) =>
           resolvedTheme.monsters?.[i % (resolvedTheme.monsters.length || 1)] ?? 'enemy_goblin';
+        // The gate wakes the theme's own boss (giant lava dragon on the
+        // caldera); the classic dungeon brute is the default elsewhere.
+        const bossSlot = resolvedTheme.boss ?? 'boss';
         const engine = new ArcadeEngine(canvas, layout, sprites, {
           onMonsterHit: (i) => {
             setBattleMonster(i);
@@ -128,6 +131,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
             setPhase('battle');
           },
           onBossEncounter: () => {
+            fightingSlotRef.current = bossSlot;
             setBattleKey((k) => k + 1);
             setPhase('boss');
           },
@@ -318,7 +322,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   const timeCritical = timeLeft !== null && timeLeft <= 30;
 
   return (
-    <div style={{ maxWidth: 960, margin: '0 auto' }}>
+    <div className="level-screen" style={{ maxWidth: 960, margin: '0 auto' }}>
       <div className="hud" style={{ marginBottom: '0.75rem', flexWrap: 'wrap' }}>
         <span className="label">QUEST {chapterIdx + 1}</span>
         <span style={{ display: 'flex', alignItems: 'center' }}>
@@ -373,6 +377,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
             queue={planRef.current.monsterQueues[battleMonster] ?? []}
             maxHp={Math.max(1, battleMaxHp)}
             lives={lives}
+            monsterSlot={fightingSlotRef.current}
             onDamage={handleBattleDamage}
             onHit={() => handleMonsterHit(battleMonster)}
             onRetreat={handleBattleRetreat}
@@ -389,6 +394,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
             maxHp={planRef.current.bossQueue.length}
             lives={lives}
             boss
+            monsterSlot={fightingSlotRef.current}
             onDamage={handleBattleDamage}
             onRetreat={handleBattleRetreat}
             onVictory={() => handleBattleVictory(null)}

@@ -1,4 +1,5 @@
 import { Router, json } from 'express';
+import type * as express from 'express';
 import multer from 'multer';
 import { parsePdf } from '../services/pdfParser.js';
 import { generateWithLlm, generateHeuristically, perChapterTarget, clampTargetCount, detectQuizMode, type ChapterContent, type GeneratedChallenge, type GenerationOptions, type QuizMode } from '../services/contentGenerator.js';
@@ -14,12 +15,12 @@ import {
   insertBook, insertChapter, insertChallenge, getBook, listBooks, updateBookQuestCount, updateBookQuizMode,
   deleteBook, updateBookAccess, isBookPlayable, updateBookQuestChapters,
   getChapters, getChapter, getChallengesForChapter, getChapterWithText,
-  countChallenges, deleteChallengesForBook, getProgress, upsertProgress,
+  countChallenges, deleteChallengesForBook, deleteChallengesForChapter, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
   insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
   getGuildMessages, getGuildMessagesSince, insertGuildMessage, deleteGuildMessage,
   getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
-  getStreak, updateStreak, STREAK_BONUS_COINS,
+  getStreak, updateStreak, STREAK_BONUS_COINS, getStreakCalendar, getGuildStreaks, isStreakAtRisk,
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
   getChallenge, replaceChallenge, nextChallengeOrd,
@@ -44,8 +45,16 @@ const FAIL_PENALTY_MAX_PCT = 0.20; // ... and at most 20%
 export async function generateChallengesForBook(
   bookId: string,
   term: string,
-  guildSettings: Record<string, unknown> | null
-): Promise<{ challengeCount: number; llmFailures: number; mode: 'llm' | 'heuristic' }> {
+  guildSettings: Record<string, unknown> | null,
+  /**
+   * 'replace' (default for regenerate-all) FIRST deletes each chapter's old
+   * challenges right before writing its new batch. The wipe is per-chapter
+   * and only after that chapter's generation has already succeeded — the
+   * old quest stays playable when a chapter's generation fails midway.
+   * 'append' never deletes (POST /books/:id/generate on an empty book).
+   */
+  mode: 'append' | 'replace' = 'append'
+): Promise<{ challengeCount: number; llmFailures: number; failedChapters: number; mode: 'llm' | 'heuristic' }> {
   const ts = resolveTermSettings(term, guildSettings);
   // The teacher's per-book quest count (null = auto) and quiz mode steer
   // generation.
@@ -67,6 +76,7 @@ export async function generateChallengesForBook(
   const useLlm = isLlmConfigured();
   let generated = 0;
   let llmFailures = 0;
+  let failedChapters = 0;
 
   for (const chapter of effectiveChapters) {
     let content: ChapterContent;
@@ -74,15 +84,29 @@ export async function generateChallengesForBook(
       content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter, perChapterTarget(target, chapters.length));
     } catch (e) {
       llmFailures++;
+      failedChapters++;
       console.error(`[generate] chapter "${chapter.title}" fell back to heuristics:`, (e as Error).message);
-      content = generateHeuristically(chapter, perChapterTarget(target, chapters.length));
+      try {
+        content = generateHeuristically(chapter, perChapterTarget(target, chapters.length));
+      } catch (he) {
+        // Even the deterministic fallback died (corrupt chapter data?). Keep
+        // the OLD challenges for this chapter and move on — never leave the
+        // book empty because one chapter could not be rebuilt.
+        console.error(`[generate] heuristic fallback also failed for "${chapter.title}":`, (he as Error).message);
+        continue;
+      }
     }
+    if (content.challenges.length === 0) continue;
+    // Replace-mode wipes THIS chapter's old set only after the new batch is
+    // in hand, so a wipe is always followed by a successful write (no more
+    // "regenerate failed → tome left with zero monsters").
+    if (mode === 'replace') await deleteChallengesForChapter(chapter.id);
     for (let i = 0; i < content.challenges.length; i++) {
       await insertChallenge({ bookId, chapterId: chapter.id, ...content.challenges[i], ord: i, quest: null });
     }
     generated += content.challenges.length;
   }
-  return { challengeCount: generated, llmFailures, mode: useLlm ? 'llm' : 'heuristic' };
+  return { challengeCount: generated, llmFailures, failedChapters, mode: useLlm ? 'llm' : 'heuristic' };
 }
 
 /** Can this user manage the book (owner, guild teacher, or any admin)? */
@@ -277,6 +301,7 @@ export function createApiRouter(): Router {
       themes: [
         { id: 'dungeon', name: 'Dungeon Night', builtin: true },
         { id: 'forest', name: 'Firefly Glade', builtin: true },
+        { id: 'lava', name: 'Volcano Caldera', builtin: true },
         ...(await fetchCustomThemes()).map((t) => ({ id: t.id, name: String(t.name ?? t.id), builtin: false })),
       ],
     });
@@ -294,8 +319,8 @@ export function createApiRouter(): Router {
   // survive redeploys) and merged into the built-in difficulty pools.
   const BUILTIN_DIFFICULTY_THEMES: Record<string, string[]> = {
     easy: ['forest', 'dungeon'],
-    medium: ['dungeon', 'forest'],
-    hard: ['dungeon'],
+    medium: ['dungeon', 'forest', 'lava'],
+    hard: ['lava', 'dungeon'],
   };
   router.get('/map/resolve', requireAuth, async (req, res) => {
     const user = await getUserById(req.user!.id);
@@ -310,7 +335,7 @@ export function createApiRouter(): Router {
     const cfg = await getGlobalMapConfig();
     if (cfg.mode === 'fixed') {
       // A pinned theme may have been deleted since — verify it still exists.
-      const known = ['dungeon', 'forest'].includes(cfg.fixedTheme) || (await fetchCustomThemes()).some((t) => t.id === cfg.fixedTheme);
+      const known = ['dungeon', 'forest', 'lava'].includes(cfg.fixedTheme) || (await fetchCustomThemes()).some((t) => t.id === cfg.fixedTheme);
       if (known) return res.json({ theme: cfg.fixedTheme, source: 'admin' as const });
     }
 
@@ -578,7 +603,30 @@ export function createApiRouter(): Router {
 
   /** The signed-in user's quest streak. */
   router.get('/me/streak', requireAuth, async (req, res) => {
-    res.json(await getStreak(req.user!.id));
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const info = await getStreak(user.id);
+    // "At risk" = streak alive but no quest yet today and the local evening
+    // has begun — the client nudges chat-pill style before the day runs out.
+    const atRisk = isStreakAtRisk(info.lastActiveDate, info.currentStreak);
+    res.json({ ...info, atRisk });
+  });
+
+  /** This adventurer's quested-day history (streak calendar + 7-day milestones). */
+  router.get('/me/streak/calendar', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    res.json({ days: await getStreakCalendar(user.id) });
+  });
+
+  /** Guild streak standings — members by current streak, longest as tiebreak. */
+  router.get('/guilds/mine/streaks', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(404).json({ error: 'You are not in a guild' });
+    const entries = await getGuildStreaks(guild.id);
+    res.json({ guildId: guild.id, entries: entries.map((e) => ({ ...e, avatar: sanitizeAvatar(e.avatar) })) });
   });
 
   // --- guild settings (teacher-only) ---------------------------------------------
@@ -734,8 +782,10 @@ export function createApiRouter(): Router {
     const term = typeof req.body?.term === 'string' && TERMS.includes(req.body.term as any) ? req.body.term : 'prelims';
     const results: { bookId: string; title: string; challengeCount: number; llmFailures: number }[] = [];
     for (const book of books) {
-      await deleteChallengesForBook(book.id);
-      const r = await generateChallengesForBook(book.id, term, guild?.termSettings ?? null);
+      // Replace-per-chapter: each chapter's old challenges are deleted only
+      // AFTER its new batch is ready — a failed LLM run can no longer leave a
+      // tome empty ("regenerate-all killed every monster").
+      const r = await generateChallengesForBook(book.id, term, guild?.termSettings ?? null, 'replace');
       results.push({ bookId: book.id, title: book.title, challengeCount: r.challengeCount, llmFailures: r.llmFailures });
     }
     res.json({ term, mode: isLlmConfigured() ? 'llm' : 'heuristic', results });
@@ -751,7 +801,14 @@ export function createApiRouter(): Router {
     // Locked / out-of-window books stay invisible to players; their teacher
     // (or owner) still sees them so they can unlock or remove them.
     const books = all.filter((b) => isBookPlayable(b) || canManageBook(user, b));
-    res.json(books);
+    // Attach the tome's total challenge count so the dashboard can flag the
+    // "no monsters" state (generation failed) instead of a mysterious empty
+    // quest on the map.
+    const withCounts = await Promise.all(books.map(async (b) => ({
+      ...b,
+      challengeCount: await countChallenges(b.id),
+    })));
+    res.json(withCounts);
   });
 
   router.get('/books/:id', requireAuth, async (req, res) => {
@@ -873,8 +930,23 @@ export function createApiRouter(): Router {
     const isOwner = book.ownerId === user?.id;
     const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
-    await deleteChallengesForBook(bookId);
-    res.json({ ok: true, note: 'Challenges cleared; call generate again.' });
+
+    const term = typeof req.body?.term === 'string' && TERMS.includes(req.body.term as any) ? req.body.term : 'prelims';
+    const guild = book.guildId ? await getGuild(book.guildId) : null;
+    // Replace-per-chapter, all in one call: every chapter's new batch is
+    // generated FIRST and only then swapped in. The old quests stay playable
+    // on any failure, and the response reports exactly what happened.
+    const result = await generateChallengesForBook(bookId, term, guild?.termSettings ?? null, 'replace');
+    res.json({
+      ok: result.challengeCount > 0,
+      challengeCount: result.challengeCount,
+      llmFailures: result.llmFailures,
+      failedChapters: result.failedChapters,
+      mode: result.mode,
+      note: result.challengeCount > 0
+        ? 'Challenges regenerated.'
+        : 'Generation produced no challenges this run — the previous quests were kept.',
+    });
   });
 
   /**
@@ -1300,6 +1372,39 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json({ coins: user.coins });
+  });
+
+  // --- error handling -----------------------------------------------------------------
+
+  /**
+   * Body-parser / multer errors arrive here as `next(err)` with a 4xx-ish
+   * `status` (oversized JSON, non-PDF upload, malformed multipart). Without
+   * this handler Express answers with its HTML error page, which the client's
+   * `await res.json()` turns into the opaque "Request failed (500)".
+   */
+  router.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(err);
+    // Multer errors (wrong field name, non-PDF, oversized file) carry a `code`
+    // but no `status` — map them to 400 instead of falling through to 500.
+    if (err?.name === 'MulterError') {
+      const friendly = err.code === 'LIMIT_FILE_SIZE'
+        ? 'That file is too large (25 MB max for PDFs).'
+        : `Upload rejected: ${err.message}`;
+      return res.status(400).json({ error: friendly });
+    }
+    const status = Number(err?.status || err?.statusCode || 0);
+    if (status >= 400 && status < 600) {
+      return res.status(status).json({ error: String(err.message || err.code || 'Bad request') });
+    }
+    return next(err);
+  });
+
+  /** Final handler: anything uncaught becomes JSON, never an HTML stack page. */
+  router.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[api] unhandled route error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Something went wrong on the server — please try again.' });
+    }
   });
 
   return router;

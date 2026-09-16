@@ -49,6 +49,11 @@
     "height": 32,
     "gridFallback": true
   },
+  "enemy_ember": {
+    "width": 32,
+    "height": 32,
+    "gridFallback": true
+  },
   "enemy_bat": {
     "width": 32,
     "height": 32,
@@ -60,6 +65,16 @@
     "gridFallback": true
   },
   "boss": {
+    "width": 32,
+    "height": 32,
+    "gridFallback": true
+  },
+  "lava_dragon": {
+    "width": 32,
+    "height": 32,
+    "gridFallback": true
+  },
+  "lava_dragon_boss": {
     "width": 32,
     "height": 32,
     "gridFallback": true
@@ -1022,11 +1037,6 @@
   "gate_open": {
     "width": 16,
     "height": 24,
-    "gridFallback": false
-  },
-  "lava_dragon": {
-    "width": 32,
-    "height": 32,
     "gridFallback": false
   }
 }

@@ -85,6 +85,20 @@ body {
   margin: 0;
   background: var(--d-dungeon);
   color: var(--d-parchment);
+  /* Mobile: prevent the game/page from wobbling as the URL bar collapses —
+     the page is managed, not over-scrolled. dvh-based app height below. */
+  overscroll-behavior-y: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* App-height helper: mobile URL bar collapses ⇒ 100vh lies. Consumers that
+   need true full-height (game screen) use --app-h instead of 100vh so the
+   layout never flashes when the bar slides away. */
+:root {
+  --app-h: 100vh;
+}
+@supports (height: 100dvh) {
+  :root { --app-h: 100dvh; }
 }
 
 img,
@@ -545,10 +559,16 @@ canvas {
   }
 }
 
-/* Canvas scaling: crisp pixels, integer scaling */
+/* Canvas scaling: crisp pixels, integer scaling. width/height clamp to the
+   viewport so a landscape phone never makes the canvas taller than the screen
+   (the HUD got pushed off-view); aspect-ratio keeps 16:9 on every width. */
 #game-canvas {
   width: min(100%, 960px);
   aspect-ratio: 640 / 360;
+  max-height: calc(var(--app-h) - 130px); /* leave room for the quest HUD */
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
   image-rendering: pixelated;
   background: var(--d-dungeon);
   border: 4px solid var(--d-black);
@@ -561,6 +581,10 @@ canvas {
   position: relative;
   width: min(100%, 960px);
   margin: 0 auto;
+  /* The canvas is a block child that caps itself to the viewport (see
+     #game-canvas); the wrapper simply centers and anchors the D-pad. */
+  display: flex;
+  justify-content: center;
 }
 
 /* ------------------------------------------------------------------ */
@@ -675,12 +699,54 @@ canvas {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Quest (game) screen                                                  */
+/* ------------------------------------------------------------------ */
+/* During a run the page must not wobble: lock the screen to the app height
+   and let the canvas + HUD share it. `100dvh` stops the classic mobile bug
+   where the disappearing URL bar makes the layout jump/flash every few
+   seconds of play. */
+.level-screen {
+  min-height: var(--app-h);
+}
+@media (pointer: coarse) {
+  .level-screen {
+    /* All but eliminate page scroll during play — touch drags on the canvas
+       move the knight, not the page (the page can still be scrolled from
+       outside the level, so nothing is unreachable). */
+    touch-action: none;
+    overscroll-behavior: contain;
+    padding-bottom: 0.5rem;
+  }
+  /* Re-enable interaction inside dialogs/inputs on the level screen. */
+  .level-screen .modal-overlay,
+  .level-screen .hud {
+    touch-action: auto;
+  }
+}
+
 /* Smaller screens: keep the HUD and dialogs reachable without horizontal
    scrolling, and give the game canvas breathing room above the D-pad. */
 @media (max-width: 640px) {
   .hud {
     gap: 0.4rem;
     font-size: 0.85rem;
+    row-gap: 0.2rem;
+  }
+  .hud > span, .hud > button {
+    flex-shrink: 0; /* items wrap whole instead of clipping mid-glyph */
+  }
+  /* Portrait phones: the 16:9 canvas + HUD + controls must fit without a
+     squeeze-flash when the browser UI hides. Cap by height, not width. */
+  #game-canvas {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    max-height: calc(var(--app-h) - 150px);
+    margin: 0 auto;
+  }
+  .game-canvas-wrap {
+    width: 100%;
   }
   .dialog-box {
     max-width: 100% !important;
@@ -869,6 +935,24 @@ canvas {
   font-size: 1.15rem;
   color: var(--d-brick);
   margin: 0;
+}
+
+/* The streak bonus swaps the chest for a big pulsing flame medallion. */
+.celebrate-flame {
+  width: 96px;
+  height: 96px;
+  display: grid;
+  place-items: center;
+  font-size: 64px;
+  line-height: 1;
+  background: radial-gradient(circle at 50% 60%, rgba(255, 157, 58, 0.35), rgba(255, 157, 58, 0.08) 60%, transparent 72%);
+  border-radius: 50%;
+  animation: celebrate-chest-in 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both, celebrate-flame-flicker 900ms ease-in-out 420ms infinite alternate;
+}
+
+@keyframes celebrate-flame-flicker {
+  from { transform: scale(1) rotate(-2deg); filter: brightness(1); }
+  to { transform: scale(1.08) rotate(2deg); filter: brightness(1.25); }
 }
 
 .celebrate-coin {
@@ -1217,4 +1301,224 @@ canvas {
 .streak-chip--idle .streak-chip__label {
   color: var(--d-stone-light);
   opacity: 0.85;
+}
+
+/* ------------------------------------------------------------------ */
+/* Streak-at-risk reminder (chat-pill style evening nudge)               */
+/* ------------------------------------------------------------------ */
+.streak-reminder__pill {
+  gap: 0.5rem;
+  border-color: var(--d-orange);
+  box-shadow: 3px 3px 0 var(--d-black), 0 0 14px rgba(255, 140, 0, 0.35);
+}
+
+.streak-reminder__flame {
+  font-size: 1.05rem;
+  animation: hint-bob 1.6s ease-in-out infinite;
+}
+
+.streak-reminder__text {
+  font-size: 0.6rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streak-reminder__flame {
+    animation: none;
+  }
+}
+
+/* Expanded reminder panel reuses .chat-panel--floating positioning. */
+.streak-reminder__panel {
+  max-width: min(340px, calc(100vw - 2.5rem));
+}
+
+/* ------------------------------------------------------------------ */
+/* Streak calendar (10-week quested-day grid)                            */
+/* ------------------------------------------------------------------ */
+/* Shop first-paint skeleton: keeps the list height stable while the fetch
+   lands, so the page doesn't jump header → full list on slow phones. */
+.shop-skeleton {
+  display: grid;
+  gap: 0.6rem;
+}
+.shop-skeleton__row {
+  height: 2.6rem;
+  background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.05) 75%);
+  background-size: 200% 100%;
+  animation: shop-skeleton-slide 1.1s linear infinite;
+}
+@keyframes shop-skeleton-slide {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shop-skeleton__row { animation: none; }
+}
+
+/* Collapsible section headers (quest calendar, guild streaks): the whole
+   header row toggles, caret included — a comfortable touch target. */
+.streak-collapse-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0.35rem 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font-size: inherit;
+}
+.streak-collapse-toggle:focus-visible {
+  outline: 2px solid var(--d-gold, #e8b43c);
+  outline-offset: 2px;
+}
+
+.streak-calendar__title {
+  font-size: 0.8rem;
+  margin: 0 0 0.2rem;
+}
+
+.streak-calendar__sub {
+  margin: 0 0 0.7rem;
+  color: var(--d-stone-light);
+  font-size: 1rem;
+}
+
+.streak-calendar__grid {
+  display: grid;
+  grid-template-rows: repeat(7, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.streak-calendar__cell {
+  aspect-ratio: 1;
+  min-width: 15px;
+  display: grid;
+  place-items: center;
+  font-size: 0.55rem;
+  line-height: 1;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.streak-calendar__cell--quested {
+  background: rgba(255, 140, 0, 0.28);
+  border-color: rgba(255, 157, 58, 0.55);
+}
+
+.streak-calendar__cell--milestone {
+  background: rgba(232, 180, 60, 0.4);
+  border-color: var(--d-gold-bright);
+  box-shadow: 0 0 6px rgba(255, 215, 106, 0.5);
+}
+
+.streak-calendar__cell--today {
+  outline: 2px solid var(--d-parchment);
+  outline-offset: 1px;
+}
+
+.streak-calendar__best {
+  margin: 0.6rem 0 0;
+  color: var(--d-stone-light);
+  font-size: 1rem;
+}
+
+.streak-calendar__best strong {
+  color: var(--d-gold);
+}
+
+.streak-calendar__empty {
+  margin: 0.6rem 0 0;
+  color: var(--d-stone-light);
+  font-size: 1rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Guild streak board (current vs longest per member)                    */
+/* ------------------------------------------------------------------ */
+.streak-board__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.streak-board__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.streak-board__row--me {
+  background: rgba(255, 215, 0, 0.09);
+  border-color: rgba(255, 215, 0, 0.35);
+}
+
+.streak-board__rank {
+  font-family: var(--font-arcade);
+  font-size: 0.6rem;
+  min-width: 2rem;
+  text-align: center;
+  color: var(--d-stone-light);
+}
+
+.streak-board__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-term);
+  font-size: 1.05rem;
+}
+
+.streak-board__flames {
+  font-family: var(--font-arcade);
+  font-size: 0.6rem;
+  color: var(--d-orange);
+  white-space: nowrap;
+}
+
+.streak-board__best {
+  font-family: var(--font-arcade);
+  font-size: 0.6rem;
+  color: var(--d-stone-light);
+  white-space: nowrap;
+}
+
+.streak-board__today {
+  font-family: var(--font-term);
+  font-size: 0.9rem;
+  color: var(--d-stone-light);
+  white-space: nowrap;
+}
+
+.streak-board__today--done {
+  color: var(--d-goblin);
+}
+
+/* Phones: keep every board row on one line — name truncates, numbers stay. */
+@media (max-width: 480px) {
+  .streak-board__row {
+    gap: 0.35rem;
+  }
+  .streak-board__rank {
+    min-width: 1.4rem;
+  }
+  .streak-board__best {
+    display: none; /* longest survives in the tooltip-less compact view */
+  }
+  .streak-board__row[title] .streak-board__best {
+    display: inline;
+  }
+}
 }

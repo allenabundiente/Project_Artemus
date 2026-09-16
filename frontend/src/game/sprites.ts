@@ -35,6 +35,11 @@ export function spriteDataUrl(name: string): string {
   return url;
 }
 
+/** True when the slot has a canonical grid — spriteDataUrl always renders it. */
+export function isCanonicalSprite(name: string): boolean {
+  return SPRITES.some((s) => s.name === name) || AVATAR_GRIDS.some((s) => s.name === name);
+}
+
 /** Preload all sprites as HTMLImageElements; falls back to data URLs on error. */
 export async function loadSprites(): Promise<SpriteMap> {
   const map: SpriteMap = {};

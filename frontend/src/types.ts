@@ -33,6 +33,8 @@ export interface BookMeta {
   createdAt: string;
   /** Teacher-set quest cap; null/undefined = unlimited. */
   questLimit?: number | null;
+  /** Total challenges across the tome (0 = "no monsters" — needs regeneration). */
+  challengeCount?: number;
 }
 
 export interface ChapterMeta {

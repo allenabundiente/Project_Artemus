@@ -3,6 +3,7 @@
 // which are applied to Supabase via the SQL editor / CLI.
 import pg from 'pg';
 import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow, CompiledLesson } from './types.js';
+import { sanitizeAvatar } from './admin.js';
 
 export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow, type CompiledLesson, type QuestBlank } from './types.js';
 
@@ -383,6 +384,11 @@ export async function countChallenges(bookId: string): Promise<number> {
 
 export async function deleteChallengesForBook(bookId: string): Promise<void> {
   await query(`DELETE FROM challenges WHERE book_id = $1`, [bookId]);
+}
+
+/** Clear one chapter's challenges (used by replace-per-chapter regeneration). */
+export async function deleteChallengesForChapter(chapterId: string): Promise<void> {
+  await query(`DELETE FROM challenges WHERE chapter_id = $1`, [chapterId]);
 }
 
 // --- progress -----------------------------------------------------------------
@@ -814,6 +820,93 @@ export async function getStreak(userId: string): Promise<StreakInfo> {
     longestStreak: row?.longest_streak ?? 0,
     lastActiveDate: row?.last_active_date ?? null,
   };
+}
+
+/**
+ * Consecutive-day history for the streak calendar: one row per day with any
+ * successful (finished) quest, newest last. Milestone flag marks the 7th day
+ * of each streak block — those days paid the STREAK_BONUS_COINS.
+ */
+export async function getStreakCalendar(userId: string): Promise<{ date: string; milestone: boolean }[]> {
+  const rows = await query<{ day: Date }>(
+    `SELECT DISTINCT (s.created_at AT TIME ZONE 'UTC')::date AS day
+     FROM scores s
+     WHERE s.user_id = $1 AND s.finished = true
+     ORDER BY day ASC`,
+    [userId],
+  );
+  const days = rows.map((r) => {
+    const d = new Date(r.day);
+    return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  });
+  const dayKey = (d: Date) => d.getTime();
+  const has = new Set(days.map(dayKey));
+  const out: { date: string; milestone: boolean }[] = [];
+  // Walk the history and count consecutive runs; every 7th day is a milestone.
+  let run = 0;
+  let prev: number | null = null;
+  const DAY_MS = 86_400_000;
+  for (const d of days) {
+    run = prev !== null && d.getTime() - prev === DAY_MS ? run + 1 : 1;
+    prev = d.getTime();
+    out.push({ date: d.toISOString().slice(0, 10), milestone: run % 7 === 0 });
+  }
+  void has;
+  return out;
+}
+
+export interface GuildStreakEntry {
+  userId: string;
+  name: string;
+  currentStreak: number;
+  longestStreak: number;
+  questedToday: boolean;
+  avatar: unknown;
+}
+
+/**
+ * Is this adventurer's streak about to die? Streak ≥1, no quest logged today
+ * (LOCAL day — the same day-boundary updateStreak uses), and the LOCAL clock
+ * has reached the evening threshold — the reminder window the client renders
+ * as a chat-pill style nudge.
+ */
+export function isStreakAtRisk(lastActiveDate: Date | null, currentStreak: number, now = new Date()): boolean {
+  if (!Number.isFinite(currentStreak) || currentStreak < 1) return false;
+  if (lastActiveDate) {
+    // updateStreak stamps last_active_date with LOCAL midnight of the quest
+    // day, so "quested today" must compare against LOCAL midnight too — a UTC
+    // comparison mis-flags evening players in any timezone east of UTC.
+    const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (lastActiveDate.getTime() >= todayLocal.getTime()) return false; // already quested today
+  }
+  return now.getHours() >= STREAK_RISK_HOUR_LOCAL;
+}
+
+/** Local hour after which an un-quested streak counts as "at risk" (6 PM). */
+export const STREAK_RISK_HOUR_LOCAL = 18;
+
+/** Guild-wide streak standings: members sorted by current streak (longest breaks ties). */
+export async function getGuildStreaks(guildId: string): Promise<GuildStreakEntry[]> {
+  const rows = await query<Record<string, unknown>>(
+    `SELECT u.id, u.name, u.current_streak, u.longest_streak, u.last_active_date,
+            u.preferences
+     FROM users u
+     WHERE u.guild_id = $1
+     ORDER BY u.current_streak DESC, u.longest_streak DESC, u.name ASC`,
+    [guildId],
+  );
+  return rows.map((r) => ({
+    userId: String(r.id),
+    name: String(r.name),
+    currentStreak: Number(r.current_streak ?? 0),
+    longestStreak: Number(r.longest_streak ?? 0),
+    // Same LOCAL-day boundary as updateStreak / isStreakAtRisk — one rule
+    // everywhere (SQL CURRENT_DATE would use the DB session timezone).
+    questedToday: r.last_active_date != null
+      ? new Date(r.last_active_date as Date).getTime() >= new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime()
+      : false,
+    avatar: r.preferences,
+  }));
 }
 
 /**

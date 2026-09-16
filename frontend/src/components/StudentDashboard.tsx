@@ -4,6 +4,7 @@ import type { AuthUser, BookDetail, BookMeta, GuildInfo, Progress, Term } from '
 import { spriteDataUrl } from '../game/sprites';
 import { rankForScore } from '../game/ranks';
 import { onHudCoins } from '../game/hudCoins';
+import { celebrateStreakBonus } from '../game/celebrate';
 import RankBadge from './RankBadge';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import WorldMap from './WorldMap';
@@ -13,6 +14,9 @@ import Leaderboard from './Leaderboard';
 import GuildChat from './GuildChat';
 import Announcements from './Announcements';
 import StreakDisplay from './StreakDisplay';
+import StreakReminder from './StreakReminder';
+import StreakCalendar from './StreakCalendar';
+import GuildStreaks from './GuildStreaks';
 import Shop from './Shop';
 import Wardrobe from './Wardrobe';
 import RoyalGate from './RoyalGate';
@@ -73,6 +77,18 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   const [questStreakBonus, setQuestStreakBonus] = useState<number | undefined>();
   // Announcements unread indicator
   const [hasUnreadAnnouncements, setHasUnreadAnnouncements] = useState(false);
+  // Authoritative streak info for the calendar panel (refreshed on mount and
+  // whenever a quest completion changes the streak).
+  const [streakInfo, setStreakInfo] = useState<api.StreakInfo | null>(null);
+  useEffect(() => {
+    void api.getStreak().then(setStreakInfo).catch(() => { /* optional chrome */ });
+  }, []);
+  useEffect(() => {
+    if (questStreak === undefined) return;
+    setStreakInfo((prev) => (prev
+      ? { ...prev, currentStreak: questStreak, longestStreak: Math.max(prev.longestStreak, questStreak) }
+      : null));
+  }, [questStreak]);
 
   const refreshBooks = useCallback(async () => {
     try {
@@ -134,7 +150,16 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       const up = await api.uploadPdf(file, questCount);
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
-      setNotice(`"${up.title}" is ready — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode).`);
+      if (gen.challengeCount === 0) {
+        // The tome exists but summoned nothing — say so plainly instead of
+        // celebrating an empty quest that students would see as "no monsters".
+        setError(
+          `"${up.title}" uploaded, but monster summoning failed this run. The quests are empty — try UPLOAD again (generation retried is safe); if it keeps failing, the story engine may be down.`
+        );
+      } else {
+        const warn = gen.llmFailures > 0 ? ` (⚠ ${gen.llmFailures} quest${gen.llmFailures === 1 ? '' : 's'} used the fallback summoner)` : '';
+        setNotice(`"${up.title}" is ready — ${up.chapters.length} quests, ${gen.challengeCount} monsters (${gen.mode} mode)${warn}.`);
+      }
       await refreshBooks();
     } catch (e) {
       setError((e as Error).message);
@@ -188,6 +213,11 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       }
       const bonus = result.streakBonus ? ` · 🔥 +${result.streakBonus} streak bonus` : '';
       setNotice(`Quest complete! +${result.rawScore} points · +${result.coinsAwarded} coins · Rank: ${result.rank}${bonus}`);
+      // 7-day milestone paid: the kingdom's flame celebration (coin fountain
+      // + fanfare), on top of the regular quest-complete notice.
+      if (result.streakBonus && result.streakBonus > 0 && result.streak) {
+        celebrateStreakBonus({ streak: result.streak, bonus: result.streakBonus, balance: result.coins });
+      }
       // Streak tracking
       if (result.streak !== undefined) {
         setQuestStreak(result.streak);
@@ -357,6 +387,14 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
             </RoyalGate>
           )}
 
+          {/* Personal streak: calendar of quested days + at-a-glance flame. */}
+          <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
+            <StreakCalendar streak={streakInfo} />
+          </div>
+
+          {/* Guild competition: current vs longest streak per member. */}
+          <GuildStreaks inGuild={!!guild} currentUserId={user.id} />
+
           <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto' }}>
             <p className="pixel-font" style={{ fontSize: '0.85rem', marginTop: 0 }}>📜 QUEST TOMES</p>
             {books.length === 0 && (
@@ -370,6 +408,11 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
                   <button className="pixel-btn pixel-btn--ghost" style={{ width: '100%', textAlign: 'left', textTransform: 'none' }} onClick={() => openBook(b.id)}>
                     ▸ {b.title}
                   </button>
+                  {typeof b.challengeCount === 'number' && b.challengeCount === 0 && (
+                    <p className="term-font" style={{ margin: '0.15rem 0 0', color: 'var(--d-rose)', fontSize: '0.95rem' }}>
+                      ⚠ This tome has no monsters yet — summon them by uploading it again.
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>
@@ -436,6 +479,10 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           <Wardrobe initial={user.avatar ?? DEFAULT_AVATAR} onSaved={(avatar) => onUserUpdated({ ...user, avatar })} />
         </RoyalGate>
       )}
+
+      {/* Streak-at-risk reminder: fires once the local evening begins with a
+          live streak unquested. Suppressed during quests like the chat pill. */}
+      <StreakReminder suppressed={view.name === 'level' || view.name === 'lesson'} />
 
       {/* Floating chat pill on every view for any guild member. While a
           quest/lesson runs it is suppressed: nothing renders (no overlap with

@@ -457,6 +457,14 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                             <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem', color: 'var(--p-red)' }} onClick={() => void handleBookRemove(b)}>🗑</button>
                           </div>
                         )}
+                        {expanded && (
+                          <ul style={{ listStyle: 'none', padding: 0, margin: '0.45rem 0 0.1rem 1.5rem' }}>
+                            <BookRulesRow
+                              book={b}
+                              onSaved={(rules) => setBooks((list) => list.map((x) => (x.id === b.id ? { ...x, ...rules } : x)))}
+                            />
+                          </ul>
+                        )}
                       </li>
                     );
                   })}

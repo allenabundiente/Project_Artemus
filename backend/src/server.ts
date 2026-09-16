@@ -28,6 +28,20 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
   console.log(`[questbook] serving frontend from ${publicDir}`);
 }
 
+/**
+ * Keep serving after stray async failures. Node 15+ crashes the process on an
+ * unhandled rejection by default; a malformed PDF upload trips exactly that
+ * inside pdf.js's internals (XRef parse errors fire outside the awaited call),
+ * which used to take the whole server down. Log the error, answer 500 for any
+ * request that's still waiting, and stay up.
+ */
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal-guard] unhandled rejection (server stays up):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[fatal-guard] uncaught exception (server stays up):', err);
+});
+
 app.listen(PORT, () => {
   console.log(`[questbook] backend listening on http://localhost:${PORT}`);
   console.log(`[questbook] LLM mode: ${llmModeLabel()}`);

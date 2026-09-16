@@ -1206,3 +1206,15 @@ canvas {
 .chat-panel__title { font-size: 0.8rem; margin: 0; }
 
 .chat-panel__min { font-size: 0.6rem; padding: 0 0.5rem; }
+
+/* Zero-state streak chip: unlit candle, muted, before the first quest of a
+   streak. Turns into the lit chip the moment today's quest completes. */
+.streak-chip--idle {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.streak-chip--idle .streak-chip__label {
+  color: var(--d-stone-light);
+  opacity: 0.85;
+}

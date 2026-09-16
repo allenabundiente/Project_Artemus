@@ -33,7 +33,22 @@ export default function StreakDisplay({ questStreak, questStreakBonus }: Props) 
     }
   }, [questStreak, questStreakBonus]);
 
-  if (!streak || streak.currentStreak === 0) return null;
+  if (!streak) return null;
+
+  // Zero-state stays visible (unlit candle) so the feature is discoverable —
+  // a brand-new student should see the streak they're about to build, guild
+  // or solo. Completing a quest today lights it.
+  if (streak.currentStreak === 0) {
+    return (
+      <span
+        className="streak-chip streak-chip--idle"
+        title="Complete a quest every day to build a streak — every 7th day pays bonus coins"
+      >
+        <span className="streak-chip__icon">🕯️</span>
+        <span className="pixel-font streak-chip__label">No streak yet</span>
+      </span>
+    );
+  }
 
   return (
     <>

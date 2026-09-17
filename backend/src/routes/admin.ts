@@ -34,7 +34,18 @@ import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, s
 import { getUserByEmail, getUserById, addCoins } from '../db/db.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const SPRITES_DIR = path.resolve(here, '../../../frontend/public/sprites');
+
+/**
+ * Where static sprite PNGs live. The repo checkout keeps them under
+ * frontend/public/sprites, but the production image only ships backend/
+ * (the built SPA is copied to backend/public). Resolve at boot: prefer the
+ * repo checkout, fall back to the served static dir, and degrade to null
+ * when neither exists — the DB-backed listing and uploads keep working.
+ */
+const SPRITES_DIR: string | null = [
+  path.resolve(here, '../../../frontend/public/sprites'),
+  path.resolve(here, '../../public/sprites'),
+].find((dir) => fs.existsSync(dir)) ?? null;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -153,6 +164,7 @@ function sanitizeCustomTheme(id: string, b: Record<string, unknown>): CustomThem
     const monsters = b.monsters.filter((m): m is string => typeof m === 'string' && isSafeSlot(m)).slice(0, 8);
     if (monsters.length > 0) out.monsters = monsters;
   }
+  if (typeof b.boss === 'string' && isSafeSlot(b.boss)) out.boss = b.boss;
   if (b.spriteOverrides && typeof b.spriteOverrides === 'object' && !Array.isArray(b.spriteOverrides)) {
     const overrides: Record<string, string> = {};
     for (const [slot, file] of Object.entries(b.spriteOverrides as Record<string, unknown>).slice(0, 16)) {
@@ -257,8 +269,10 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
 
   router.get('/admin/sprites', requireAdmin, async (_req, res) => {
     try {
-      const manifest = JSON.parse(fs.readFileSync(path.join(SPRITES_DIR, 'manifest.json'), 'utf8'));
-      const diskFiles = fs.existsSync(SPRITES_DIR)
+      const manifest = SPRITES_DIR
+        ? JSON.parse(fs.readFileSync(path.join(SPRITES_DIR, 'manifest.json'), 'utf8'))
+        : {};
+      const diskFiles = SPRITES_DIR && fs.existsSync(SPRITES_DIR)
         ? fs.readdirSync(SPRITES_DIR).filter((f) => f.endsWith('.png')).map((f) => f.replace(/\.png$/, ''))
         : [];
       let dbSprites: string[] = [];
@@ -283,8 +297,10 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       await putSprite(slot, req.file.buffer, req.file.mimetype || 'image/png');
       // Best-effort disk mirror for local dev; failures are non-fatal.
       try {
-        fs.mkdirSync(SPRITES_DIR, { recursive: true });
-        fs.writeFileSync(path.join(SPRITES_DIR, `${slot}.png`), req.file.buffer);
+        if (SPRITES_DIR) {
+          fs.mkdirSync(SPRITES_DIR, { recursive: true });
+          fs.writeFileSync(path.join(SPRITES_DIR, `${slot}.png`), req.file.buffer);
+        }
       } catch {
         // Read-only FS — the DB copy above still wins.
       }
@@ -302,14 +318,24 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     try {
       await deleteSprite(slot); // clear any DB override first
       try {
-        fs.rmSync(path.join(SPRITES_DIR, `${slot}.png`), { force: true });
+        if (SPRITES_DIR) fs.rmSync(path.join(SPRITES_DIR, `${slot}.png`), { force: true });
       } catch {
         // Read-only FS — fine.
       }
-      // "Restore" = regenerate from the canonical grid via the generator script.
+      // "Restore" = regenerate from the canonical grid via the generator
+      // script. Needs the frontend checkout (dev machine only); in the
+      // production image we simply drop the DB override and report that the
+      // canonical art comes back with the next deploy.
+      const frontendRoot = SPRITES_DIR ? path.resolve(SPRITES_DIR, '..', '..') : null;
+      const generator = frontendRoot ? path.join(frontendRoot, 'scripts', 'generate-sprites.ts') : null;
+      if (!frontendRoot || !generator || !fs.existsSync(generator)) {
+        await logAudit(req, 'sprite_restore', slot);
+        res.json({ ok: true, slot, note: 'DB override cleared — canonical art returns with the next deploy.' });
+        return;
+      }
       const { execFile } = await import('node:child_process');
       const prom = new Promise<void>((resolve, reject) => {
-        execFile('npx', ['tsx', 'scripts/generate-sprites.ts'], { cwd: path.resolve(SPRITES_DIR, '..') }, (err) => (err ? reject(err) : resolve()));
+        execFile('npx', ['tsx', 'scripts/generate-sprites.ts'], { cwd: frontendRoot }, (err) => (err ? reject(err) : resolve()));
       });
       await prom;
       await logAudit(req, 'sprite_restore', slot);
@@ -388,7 +414,9 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       // DB offline — fall through to the disk mirror.
     }
     try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(SPRITES_DIR, 'animations.json'), 'utf8'));
+      const parsed = SPRITES_DIR && fs.existsSync(path.join(SPRITES_DIR, 'animations.json'))
+        ? JSON.parse(fs.readFileSync(path.join(SPRITES_DIR, 'animations.json'), 'utf8'))
+        : [];
       return Array.isArray(parsed) ? (parsed as AnimDef[]) : [];
     } catch {
       return [];
@@ -398,7 +426,13 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
   async function writeAnims(anims: AnimDef[]): Promise<void> {
     await putJson('animations', anims);
     try {
-      fs.writeFileSync(path.join(SPRITES_DIR, 'animations.json'), JSON.stringify(anims, null, 2) + '\n');
+      if (SPRITES_DIR) {
+        try {
+          fs.writeFileSync(path.join(SPRITES_DIR, 'animations.json'), JSON.stringify(anims, null, 2) + '\n');
+        } catch {
+          // Read-only FS — DB remains the source of truth.
+        }
+      }
     } catch {
       // Read-only FS — DB copy above is what matters.
     }
@@ -408,7 +442,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     try {
       const anims = await readAnims();
       // Which frame PNGs exist but belong to no registered animation yet?
-      const diskFiles = fs.existsSync(SPRITES_DIR)
+      const diskFiles = SPRITES_DIR && fs.existsSync(SPRITES_DIR)
         ? fs.readdirSync(SPRITES_DIR).filter((f) => f.endsWith('.png')).map((f) => f.replace(/\.png$/, ''))
         : [];
       let dbSprites: string[] = [];

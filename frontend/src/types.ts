@@ -185,6 +185,10 @@ export interface ThemeMeta {
   floorSpeckle?: string;
   /** Patrol roster, if the theme defines one. */
   monsters?: string[];
+  /** End-of-level boss slot, if the theme defines one. */
+  boss?: string;
+  /** Per-slot art replacements (slot → sprite file), if the theme defines them. */
+  spriteOverrides?: Record<string, string>;
 }
 
 export interface MapResolve {

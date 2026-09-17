@@ -1028,15 +1028,5 @@
     "width": 16,
     "height": 16,
     "gridFallback": true
-  },
-  "gate_locked": {
-    "width": 16,
-    "height": 24,
-    "gridFallback": false
-  },
-  "gate_open": {
-    "width": 16,
-    "height": 24,
-    "gridFallback": false
   }
 }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as api from '../api';
 import type { AdminAccount, AuditEntry, FeatureRow, GuildAdminInfo, MapConfig, RosterEntry, ShopItem, ThemeMeta } from '../types';
-import { spriteDataUrl } from '../game/sprites';
+import { spriteDataUrl, isCanonicalSprite } from '../game/sprites';
 import { SPRITES } from '../game/spriteGrids';
+import { THEMES } from '../game/themes';
 import { AVATAR_GRIDS } from '../game/avatarGrids';
 import { spriteApiUrl, refreshSpriteVersions, onSpriteVersions } from '../game/spriteVersions';
 import type { AnimDef, CustomThemePayload } from '../api';
@@ -70,12 +71,43 @@ function FeaturesTab() {
 
 // --- sprite manager --------------------------------------------------------------
 
+/** slot → where it's referenced (themes, rosters, animations, hard-coded props). */
+type UsageMap = Record<string, string[]>;
+
+/** Build the usage map from built-in themes, custom themes, and animations. */
+function collectUsage(customThemes: ThemeMeta[], anims: api.AnimDef[]): UsageMap {
+  const usage: UsageMap = {};
+  const add = (slot: string | undefined, where: string) => {
+    if (!slot) return;
+    (usage[slot] ??= []).push(where);
+  };
+  const addTheme = (name: string, t: { monsters?: string[]; boss?: string; spriteOverrides?: Record<string, string> }) => {
+    t.monsters?.forEach((m) => add(m, `${name} · patrol`));
+    add(t.boss, `${name} · boss`);
+    for (const [slot, file] of Object.entries(t.spriteOverrides ?? {})) {
+      add(slot, `${name} · art swap`);
+      add(file, `${name} · replacement art`);
+    }
+  };
+  for (const t of THEMES) addTheme(`${t.name} (built-in)`, t);
+  for (const t of customThemes) {
+    if (!t.builtin) addTheme(t.name, t);
+  }
+  for (const a of anims) a.frames.forEach((f, i) => add(f, `${a.name} · frame ${i + 1}`));
+  add('castle_gate', 'Level props · hard-coded');
+  return usage;
+}
+
 function SpritesTab() {
-  const [files, setFiles] = useState<string[]>([]);
+  const [files, setFiles] = useState<string[] | null>(null);
   const [custom, setCustom] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [newSlot, setNewSlot] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [usage, setUsage] = useState<UsageMap | null>(null);
   const [, force] = useState(0);
 
   useEffect(() => {
@@ -86,13 +118,28 @@ function SpritesTab() {
     return onSpriteVersions(() => force((n) => n + 1));
   }, []);
 
+  async function refresh() {
+    try {
+      const s = await api.getAdminSprites();
+      setFiles(s.files);
+      setCustom(s.custom ?? []);
+    } catch {
+      setFiles([]);
+    }
+  }
+
   async function restore(slot: string) {
-    if (!window.confirm(`Restore "${slot}" from its canonical grid? Your custom art will be replaced.`)) return;
+    const canonical = isCanonicalSprite(slot);
+    const message = canonical
+      ? `Restore "${slot}" from its canonical grid? Your custom art will be replaced.`
+      : `Remove the custom sprite "${slot}"? Anything using it falls back to its default art.`;
+    if (!window.confirm(message)) return;
     setBusy(slot);
     try {
-      await api.restoreSprite(slot);
+      const res = await api.restoreSprite(slot);
       await refreshSpriteVersions(); // drop the slot's ?v= → preview falls back to grid art
-      setNotice(`${slot} restored from the canonical grid.`);
+      setNotice(res.note ?? `${slot} restored from the canonical grid.`);
+      await refresh();
       force((n) => n + 1);
     } catch (e) {
       setNotice((e as Error).message);
@@ -101,7 +148,87 @@ function SpritesTab() {
     }
   }
 
-  const shown = files.filter((f) => f.includes(filter.toLowerCase()));
+  /** Batch-add sprites from files (picker, drop, or paste). Names come from
+   *  filenames (minus .png); a typed base name overrides the single-file case
+   *  or prefixes multiple files (base_1, base_2…). DB-backed, so the art
+   *  survives redeploys even where the disk is read-only. */
+  async function addSprites(slotBase: string, files: File[]) {
+    if (files.length === 0) return;
+    const base = slotBase.trim().toLowerCase().replace(/\s+/g, '_');
+    const pngs = files.filter((f) => f.type === 'image/png');
+    const skippedNonPng = files.length - pngs.length;
+    const tooBig = pngs.filter((f) => f.size > 512 * 1024);
+    const ok = pngs.filter((f) => f.size <= 512 * 1024);
+    const added: string[] = [];
+    const failures: string[] = [];
+    setBusy('__batch__');
+    try {
+      for (let i = 0; i < ok.length; i++) {
+        const f = ok[i];
+        let name: string;
+        if (base && ok.length === 1) name = base;
+        else if (base) name = `${base}_${i + 1}`;
+        else {
+          name = f.name.replace(/\.png$/i, '').toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64);
+          if (!name) name = `pasted_${Date.now()}`;
+        }
+        if (!/^[a-z0-9_]{1,64}$/.test(name)) {
+          failures.push(`${f.name} → invalid name "${name}"`);
+          continue;
+        }
+        try {
+          await api.uploadSprite(name, f);
+          added.push(name);
+        } catch (e) {
+          failures.push(`${f.name} → ${(e as Error).message}`);
+        }
+      }
+      const parts: string[] = [];
+      if (added.length > 0) parts.push(`Added ${added.length} sprite${added.length === 1 ? '' : 's'}: ${added.join(', ')}.`);
+      if (skippedNonPng > 0) parts.push(`${skippedNonPng} non-PNG file${skippedNonPng === 1 ? '' : 's'} skipped.`);
+      if (tooBig.length > 0) parts.push(`${tooBig.length} file${tooBig.length === 1 ? '' : 's'} over 512 KB skipped.`);
+      if (failures.length > 0) parts.push(`Failed — ${failures.join('; ')}.`);
+      if (parts.length > 0) setNotice(parts.join(' '));
+      if (added.length > 0) {
+        setNewSlot('');
+        await refreshSpriteVersions();
+        await refresh();
+        force((n) => n + 1);
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Paste PNGs straight into the vault (Ctrl+V of a copied image).
+  useEffect(() => {
+    function onPaste(e: ClipboardEvent) {
+      const pasted = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type === 'image/png');
+      if (pasted.length > 0) void addSprites(newSlot, pasted);
+    }
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newSlot]);
+
+  /** Lazy-load the usage map the first time the panel opens. */
+  async function toggleUsage() {
+    const next = !usageOpen;
+    setUsageOpen(next);
+    if (next && usage === null) {
+      try {
+        const [themesRes, animsRes] = await Promise.all([
+          api.getThemes(),
+          api.getAnimations().catch(() => ({ animations: [], unassigned: [] })),
+        ]);
+        setUsage(collectUsage(themesRes.themes ?? [], animsRes.animations));
+      } catch {
+        setUsage({});
+      }
+    }
+  }
+
+  const shown = (files ?? []).filter((f) => f.includes(filter.toLowerCase()));
 
   return (
     <div className="pixel-panel">
@@ -112,9 +239,93 @@ function SpritesTab() {
       </p>
       <input className="pixel-input" placeholder="Filter slots…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ marginBottom: '0.75rem', width: '100%' }} />
       {notice && <p className="status-text">{notice}</p>}
+      {files === null ? (
+        <p className="status-text">Opening the vault…</p>
+      ) : files.length === 0 ? (
+        <p className="status-text" style={{ margin: '0 0 0.75rem' }}>
+          The vault is empty — the server has no static sprite pack and no custom uploads yet.
+          Add the first sprite below. Built-in slots (goblin, boss, props, avatars…) come from the
+          code build and keep working in-game regardless.
+        </p>
+      ) : null}
+      {/* Batch-add: pick files, drag & drop onto the zone, or paste copied PNGs.
+          Names come from filenames; a typed base name names a single upload or
+          prefixes many (frost_golem_1, frost_golem_2…). */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const dropped = Array.from(e.dataTransfer.files ?? []);
+          if (dropped.length > 0) void addSprites(newSlot, dropped);
+        }}
+        style={{
+          display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center',
+          margin: '0.25rem 0 0.75rem', padding: '0.5rem',
+          border: `2px dashed ${dragOver ? 'var(--p-yellow)' : 'rgba(255,255,255,0.2)'}`,
+          background: dragOver ? 'rgba(255,200,60,0.08)' : 'transparent',
+        }}
+      >
+        <input
+          className="pixel-input"
+          placeholder="base name (optional — filenames name the rest)"
+          value={newSlot}
+          onChange={(e) => setNewSlot(e.target.value)}
+          style={{ flex: '1 1 220px', maxWidth: 300 }}
+        />
+        <label
+          className={`pixel-btn ${newSlot.trim() || dragOver ? 'pixel-btn--gold' : 'pixel-btn--ghost'}`}
+          style={{ fontSize: '0.6rem', cursor: busy ? 'wait' : 'pointer' }}
+          title="Upload PNGs into new sprite slots — names come from filenames"
+        >
+          {busy === '__batch__' ? '…' : '＋ ADD SPRITES'}
+          <input
+            type="file"
+            accept="image/png"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? []);
+              if (picked.length > 0) void addSprites(newSlot, picked);
+              e.target.value = '';
+            }}
+          />
+        </label>
+        <span className="term-font" style={{ fontSize: '0.85rem', color: 'var(--d-stone-light)' }}>
+          …or drop PNGs here / paste (Ctrl+V). Names from filenames{newSlot.trim() ? `; "${newSlot.trim()}" names one or prefixes the rest` : ''}.
+        </span>
+      </div>
+      {/* Usage map — where each slot is referenced, so admins see impact before replacing art. */}
+      <button
+        className="pixel-btn pixel-btn--ghost"
+        style={{ fontSize: '0.6rem', marginBottom: '0.5rem' }}
+        aria-expanded={usageOpen}
+        onClick={() => void toggleUsage()}
+      >
+        {usageOpen ? '▾' : '▸'} WHERE SPRITES ARE USED
+      </button>
+      {usageOpen && (
+        usage === null ? (
+          <p className="status-text">Mapping sprite usage…</p>
+        ) : (
+          <div style={{ marginBottom: '0.75rem', maxHeight: 220, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.12)', padding: '0.5rem' }}>
+            {Object.keys(usage).length === 0 ? (
+              <p className="status-text" style={{ margin: 0 }}>No references found — every theme uses its default roster.</p>
+            ) : (
+              Object.entries(usage).sort(([a], [b]) => a.localeCompare(b)).map(([slot, where]) => (
+                <p key={slot} className="term-font" style={{ fontSize: '0.9rem', margin: '0.15rem 0' }}>
+                  <strong style={{ color: 'var(--p-yellow)' }}>{slot}</strong>
+                  <span style={{ color: 'var(--d-stone-light)' }}> — {where.join(' · ')}</span>
+                </p>
+              ))
+            )}
+          </div>
+        )
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.5rem' }}>
         {shown.map((slot) => (
-          <SpriteCell key={slot} slot={slot} busy={busy === slot} custom={custom.includes(slot)} onRestore={() => void restore(slot)} onUpload={async (file) => {
+          <SpriteCell key={slot} slot={slot} busy={busy === slot} custom={custom.includes(slot)} usage={usageOpen ? usage?.[slot] : undefined} onRestore={() => void restore(slot)} onUpload={async (file) => {
             setBusy(slot);
             try {
               await api.uploadSprite(slot, file);
@@ -134,17 +345,29 @@ function SpritesTab() {
   );
 }
 
-function SpriteCell({ slot, busy, custom, onRestore, onUpload }: { slot: string; busy: boolean; custom: boolean; onRestore: () => void; onUpload: (f: File) => void }) {
+function SpriteCell({ slot, busy, custom, usage, onRestore, onUpload }: { slot: string; busy: boolean; custom: boolean; usage?: string[]; onRestore: () => void; onUpload: (f: File) => void }) {
+  const isCanonical = isCanonicalSprite(slot);
+  const [failed, setFailed] = useState(false);
+  const used = usage && usage.length > 0;
   return (
-    <div style={{ textAlign: 'center', border: '1px solid rgba(255,255,255,0.15)', padding: '0.4rem' }}>
+    <div style={{ textAlign: 'center', border: `1px solid ${used ? 'rgba(230,180,60,0.55)' : 'rgba(255,255,255,0.15)'}`, padding: '0.4rem', position: 'relative' }}>
+      {used && (
+        <span
+          title={`In use — ${usage!.join(', ')}`}
+          aria-label={`Used by ${usage!.length} reference${usage!.length === 1 ? '' : 's'}`}
+          style={{ position: 'absolute', top: 2, right: 4, fontSize: '0.55rem' }}
+        >
+          🔗{usage!.length > 1 ? usage!.length : ''}
+        </span>
+      )}
       <img
         src={custom ? spriteApiUrl(slot) : spriteDataUrl(slot)}
         alt={slot}
-        title={custom ? 'Custom art (stored server-side)' : 'Built-in grid art'}
+        title={custom ? 'Custom art (stored server-side)' : isCanonical ? 'Built-in grid art' : 'Custom PNG (served from disk)'}
         style={{ width: 48, height: 48, imageRendering: 'pixelated', objectFit: 'contain' }}
-        onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
+        onError={() => setFailed(true)}
       />
-      <p className="term-font" style={{ fontSize: '0.7rem', margin: '0.25rem 0', wordBreak: 'break-all' }}>{slot}</p>
+      <p className="term-font" style={{ fontSize: '0.7rem', margin: '0.25rem 0', wordBreak: 'break-all' }}>{failed && !custom ? '⚠ ' : ''}{slot}</p>
       <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
         <label className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem', cursor: busy ? 'wait' : 'pointer' }}>
           {busy ? '…' : '⬆'}
@@ -159,7 +382,11 @@ function SpriteCell({ slot, busy, custom, onRestore, onUpload }: { slot: string;
             }}
           />
         </label>
-        <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={onRestore} disabled={busy} title="Restore from canonical grid">↺</button>
+        {custom ? (
+          <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem', color: 'var(--p-red)' }} onClick={onRestore} disabled={busy} title="Remove this custom sprite">🗑</button>
+        ) : isCanonical ? (
+          <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={onRestore} disabled={busy} title="Restore from canonical grid">↺</button>
+        ) : null}
       </div>
     </div>
   );

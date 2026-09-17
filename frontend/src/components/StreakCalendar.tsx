@@ -68,7 +68,7 @@ export default function StreakCalendar({ streak }: { streak: api.StreakInfo | nu
       {open && (
         <>
           <p className="term-font streak-calendar__sub">
-            Every day you finish a quest lights a tile · ⭐ = 7-day bonus day (+50 coins)
+            Every day you finish a quest lights a tile · ⭐ = 7-day bonus day (+50 coins) · streaks reset at midnight — quest daily to keep the flame
           </p>
           <div className="streak-calendar__grid" role="img" aria-label="Calendar of quested days for the last ten weeks">
             {grid.map((c) => (

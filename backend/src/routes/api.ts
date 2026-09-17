@@ -20,7 +20,7 @@ import {
   insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
   getGuildMessages, getGuildMessagesSince, insertGuildMessage, deleteGuildMessage,
   getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
-  getStreak, updateStreak, STREAK_BONUS_COINS, getStreakCalendar, getGuildStreaks, isStreakAtRisk,
+  getStreak, updateStreak, STREAK_BONUS_COINS, getStreakCalendar, getGuildStreaks, isStreakAtRisk, effectiveStreak,
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
   getChallenge, replaceChallenge, nextChallengeOrd,
@@ -53,7 +53,9 @@ export async function generateChallengesForBook(
    * old quest stays playable when a chapter's generation fails midway.
    * 'append' never deletes (POST /books/:id/generate on an empty book).
    */
-  mode: 'append' | 'replace' = 'append'
+  mode: 'append' | 'replace' = 'append',
+  /** Teacher single-chapter regenerate: touch only this chapter, leave the rest of the tome alone. */
+  onlyChapterId?: string
 ): Promise<{ challengeCount: number; llmFailures: number; failedChapters: number; mode: 'llm' | 'heuristic' }> {
   const ts = resolveTermSettings(term, guildSettings);
   // The teacher's per-book quest count (null = auto) and quiz mode steer
@@ -73,12 +75,15 @@ export async function generateChallengesForBook(
   // lever — generation (LLM calls!) only runs for quest chapters.
   const questChapterCount = book?.questChapters ?? null;
   const effectiveChapters = questChapterCount ? chapters.slice(0, questChapterCount) : chapters.slice(0, 12);
+  // Single-chapter mode narrows the loop below to just that chapter (an empty
+  // filter means the id belongs to a non-quest chapter — the caller 404s).
+  const selectedChapters = onlyChapterId ? effectiveChapters.filter((c) => c.id === onlyChapterId) : effectiveChapters;
   const useLlm = isLlmConfigured();
   let generated = 0;
   let llmFailures = 0;
   let failedChapters = 0;
 
-  for (const chapter of effectiveChapters) {
+  for (const chapter of selectedChapters) {
     let content: ChapterContent;
     try {
       content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter, perChapterTarget(target, chapters.length));
@@ -608,8 +613,13 @@ export function createApiRouter(): Router {
     const info = await getStreak(user.id);
     // "At risk" = streak alive but no quest yet today and the local evening
     // has begun — the client nudges chat-pill style before the day runs out.
+    // Deliberately the STORED streak: at-risk only fires before midnight, while
+    // the streak is still salvageable; past midnight the effective streak is 0
+    // and there is nothing left to save.
     const atRisk = isStreakAtRisk(info.lastActiveDate, info.currentStreak);
-    res.json({ ...info, atRisk });
+    // The displayed streak reads as 0 once the local day after the last quest
+    // has begun — the midnight reset rule (see effectiveStreak in db.ts).
+    res.json({ ...info, currentStreak: effectiveStreak(info), atRisk });
   });
 
   /** This adventurer's quested-day history (streak calendar + 7-day milestones). */
@@ -946,6 +956,36 @@ export function createApiRouter(): Router {
       note: result.challengeCount > 0
         ? 'Challenges regenerated.'
         : 'Generation produced no challenges this run — the previous quests were kept.',
+    });
+  });
+
+  /**
+   * Teacher single-chapter regenerate: rebuild ONE chapter's quest set and
+   * leave every other chapter of the tome untouched. Same replace-after-
+   * generate safety as the whole-book flow, scoped to a single chapter.
+   */
+  router.post('/books/:id/chapters/:chapterId/regenerate', requireAuth, async (req, res) => {
+    const bookId = String(req.params.id);
+    const chapterId = String(req.params.chapterId);
+    const book = await getBook(bookId);
+    if (!book) return res.status(404).json({ error: 'Book not found' });
+    const chapter = await getChapter(chapterId);
+    if (!chapter || chapter.bookId !== bookId) return res.status(404).json({ error: 'Chapter not found' });
+    const user = await getUserById(req.user!.id);
+    if (!user || !canManageBook(user, book)) return res.status(403).json({ error: 'Not allowed' });
+
+    const term = typeof req.body?.term === 'string' && TERMS.includes(req.body.term as any) ? req.body.term : 'prelims';
+    const guild = book.guildId ? await getGuild(book.guildId) : null;
+    const result = await generateChallengesForBook(bookId, term, guild?.termSettings ?? null, 'replace', chapterId);
+    res.json({
+      ok: result.challengeCount > 0,
+      chapterId,
+      challengeCount: result.challengeCount,
+      llmFailures: result.llmFailures,
+      mode: result.mode,
+      note: result.challengeCount > 0
+        ? `"${chapter.title}" regenerated — ${result.challengeCount} fresh monsters. The rest of the tome is untouched.`
+        : `Generation produced no challenges for "${chapter.title}" this run — its previous quests were kept.`,
     });
   });
 

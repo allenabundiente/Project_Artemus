@@ -179,6 +179,8 @@ export interface StreakInfo {
   lastActiveDate: string | null;
   /** Streak ≥1, no quest today, and the evening has begun — show the reminder. */
   atRisk?: boolean;
+  /** The raw stored streak, still salvageable while the reminder can fire. */
+  storedStreak?: number;
 }
 
 /** Get the user's current streak info. */
@@ -290,6 +292,11 @@ export async function setBookQuestCount(bookId: string, questCount: number | nul
  */
 export async function regenerateBook(bookId: string): Promise<{ ok: boolean; challengeCount?: number; note?: string }> {
   return send(`/api/books/${bookId}/regenerate`, 'POST');
+}
+
+/** Rebuild ONE chapter's quest set; every other chapter of the tome is untouched. */
+export async function regenerateBookChapter(bookId: string, chapterId: string, term: string = 'prelims'): Promise<{ ok: boolean; chapterId: string; challengeCount: number; note: string }> {
+  return send(`/api/books/${bookId}/chapters/${chapterId}/regenerate`, 'POST', { term });
 }
 
 /** All challenges in a book grouped by chapter — the teacher's review feed. */

@@ -43,6 +43,11 @@ export default function StreakReminder({ suppressed = false }: { suppressed?: bo
   }
 
   if (!info || suppressed || dismissed || !info.atRisk) return null;
+  // atRisk is computed from the STORED streak server-side — during the evening
+  // window the raw count is the salvageable one, even though the displayed
+  // streak already reset to 0 for days that died at midnight (they never
+  // reach this pill).
+  const raw = info.storedStreak ?? info.currentStreak;
   void dismissKey;
 
   return (
@@ -56,7 +61,7 @@ export default function StreakReminder({ suppressed = false }: { suppressed?: bo
         >
           <span className="streak-reminder__flame" aria-hidden>🔥</span>
           <span className="pixel-font streak-reminder__text">
-            {info.currentStreak}-DAY STREAK AT RISK
+            {raw}-DAY STREAK AT RISK
           </span>
           <span className="chat-fab__dot" aria-hidden />
         </button>
@@ -67,11 +72,11 @@ export default function StreakReminder({ suppressed = false }: { suppressed?: bo
             <button className="pixel-btn pixel-btn--ghost chat-panel__min" onClick={() => setOpen(false)} aria-label="Minimize">×</button>
           </div>
           <p className="term-font" style={{ margin: '0 0 0.6rem', fontSize: '1.05rem' }}>
-            You have a <strong style={{ color: 'var(--d-gold)' }}>{info.currentStreak}-day streak</strong> going —
+            You have a <strong style={{ color: 'var(--d-gold)' }}>{raw}-day streak</strong> going —
             complete one quest before midnight to keep the flame alive
-            {(info.currentStreak + 1) % 7 === 0
+            {(raw + 1) % 7 === 0
               ? ' and claim tomorrow’s 7-day bonus!'
-              : `. ${(7 - (info.currentStreak % 7)) % 7 || 7} more day${(7 - (info.currentStreak % 7)) === 1 ? '' : 's'} to the next bonus.`}
+              : `. ${(7 - (raw % 7)) % 7 || 7} more day${(7 - (raw % 7)) === 1 ? '' : 's'} to the next bonus.`}
           </p>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.6rem' }} onClick={dismiss}>

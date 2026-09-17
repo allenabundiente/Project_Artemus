@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
-import type { AuthUser, BookChallengeReview, BookMeta, QuizMode, RosterEntry, Term, TermSettings } from '../types';
+import type { AuthUser, BookChallengeReview, BookMeta, ChapterMeta, QuizMode, RosterEntry, Term, TermSettings } from '../types';
 import BookRulesRow from './BookRulesRow';
 import GuildSettings from './GuildSettings';
 import Leaderboard from './Leaderboard';
@@ -44,8 +44,10 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
   const [bookQuestChapters, setBookQuestChapters] = useState<Record<string, string>>({});
   /** Which tomes are expanded (showing controls). */
   const [expandedBooks, setExpandedBooks] = useState<Record<string, boolean>>({});
-  /** Per-tome availability-window edits (bookId → datetime-local strings). */
-  const [bookWindows, setBookWindows] = useState<Record<string, { from: string; until: string }>>({});
+  /** Per-tome chapter list (fetched lazily when a tome expands) for single-chapter re-summons. */
+  const [bookChapters, setBookChapters] = useState<Record<string, ChapterMeta[]>>({});
+  /** Per-tome chapter pick for the single-chapter regenerate (bookId → chapterId). */
+  const [chapterPicker, setChapterPicker] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
   const QUEST_COUNT_CHOICES = ['5', '8', '10', '12', '15', '20', '30', '40', '50'];
@@ -220,25 +222,6 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     }
   }
 
-  /** Apply the edited availability window (clears whichever side is empty). */
-  async function handleBookWindow(book: BookMeta) {
-    const w = bookWindows[book.id] ?? { from: toLocalInput(book.availableFrom), until: toLocalInput(book.availableUntil) };
-    setError(null);
-    setBusy('Saving schedule…');
-    try {
-      await api.setBookAccess(book.id, {
-        availableFrom: w.from ? new Date(w.from).toISOString() : null,
-        availableUntil: w.until ? new Date(w.until).toISOString() : null,
-      });
-      setNotice(`"${book.title}" availability updated.`);
-      await refreshGuildData();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }
-
   /** Toggle a tome's quiz mode and regenerate so the new angle takes hold. */
   async function handleBookMode(book: BookMeta) {
     const next: QuizMode = book.quizMode === 'programming' ? 'general' : 'programming';
@@ -253,6 +236,32 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
         setNotice(`"${book.title}" re-summoned in ${next} mode — ${gen.challengeCount} monsters.`);
       }
       await refreshGuildData();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Lazy-load a tome's chapter list for the single-chapter regenerate picker. */
+  async function ensureBookChapters(bookId: string): Promise<ChapterMeta[]> {
+    const cached = bookChapters[bookId];
+    if (cached) return cached;
+    const detail = await api.getBook(bookId);
+    setBookChapters((m) => ({ ...m, [bookId]: detail.chapters }));
+    return detail.chapters;
+  }
+
+  /** Re-summon ONE chapter's monsters, leaving the rest of the tome untouched. */
+  async function handleChapterRegenerate(book: BookMeta, chapterId: string) {
+    const chapter = bookChapters[book.id]?.find((c) => c.id === chapterId);
+    setError(null);
+    setBusy(`Re-summoning "${chapter?.title ?? 'chapter'}"…`);
+    try {
+      const res = await api.regenerateBookChapter(book.id, chapterId, term);
+      setNotice(`"${chapter?.title ?? 'Chapter'}" re-summoned — ${res.challengeCount} fresh monsters. The rest of the tome is untouched.`);
+      await refreshGuildData();
+      await ensureBookChapters(book.id); // refresh the cached chapter list
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -490,41 +499,52 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                     );
                   })}
                 </ul>
-                <p className="pixel-font" style={{ fontSize: '0.55rem', margin: '0.75rem 0 0.35rem', color: 'var(--d-stone-light)' }}>⏳ TIME-LIMITED ACCESS (optional)</p>
+                <p className="pixel-font" style={{ fontSize: '0.55rem', margin: '0.75rem 0 0.35rem', color: 'var(--d-stone-light)' }}>⚔ RE-SUMMON A SINGLE CHAPTER (schedule edits live in each tome's rules row)</p>
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                   {books.map((b) => {
-                    const w = bookWindows[b.id] ?? { from: toLocalInput(b.availableFrom), until: toLocalInput(b.availableUntil) };
+                    const chapters = bookChapters[b.id];
                     return (
                       <li key={b.id} className="term-font" style={{ fontSize: '1rem', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                         <span style={{ flex: 1, minWidth: '8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={b.title}>
                           {b.title}
                         </span>
-                        <input
-                          type="datetime-local"
-                          className="pixel-input"
-                          style={{ fontSize: '0.7rem', width: 190 }}
-                          value={w.from}
-                          onChange={(e) => setBookWindows((m) => ({ ...m, [b.id]: { ...w, from: e.target.value } }))}
-                          title="Opens at (empty = no start bound)"
-                        />
-                        <span style={{ color: 'var(--d-stone-light)' }}>→</span>
-                        <input
-                          type="datetime-local"
-                          className="pixel-input"
-                          style={{ fontSize: '0.7rem', width: 190 }}
-                          value={w.until}
-                          onChange={(e) => setBookWindows((m) => ({ ...m, [b.id]: { ...w, until: e.target.value } }))}
-                          title="Closes at (empty = no end bound)"
-                        />
                         <button
                           className="pixel-btn pixel-btn--ghost"
                           style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
                           disabled={!!busy}
-                          title="Save the availability window"
-                          onClick={() => void handleBookWindow(b)}
+                          title="Load this tome's chapters"
+                          onClick={() => void ensureBookChapters(b.id).catch((e) => setError((e as Error).message))}
                         >
-                          ⏳ SET
+                          {chapters ? '↻' : '▾'} CHAPTERS
                         </button>
+                        {chapters && (
+                          <>
+                            <select
+                              className="pixel-select"
+                              style={{ fontSize: '0.7rem' }}
+                              value={chapterPicker[b.id] ?? ''}
+                              onChange={(e) => setChapterPicker((m) => ({ ...m, [b.id]: e.target.value }))}
+                              title="Pick the chapter to re-summon"
+                            >
+                              <option value="">PICK…</option>
+                              {chapters.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.challengeCount > 0 ? `${c.idx + 1}. ${c.title} (${c.challengeCount})` : `${c.idx + 1}. ${c.title} (0 ⚠)`}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              className="pixel-btn pixel-btn--ghost"
+                              style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                              disabled={!!busy || !chapterPicker[b.id]}
+                              title="Regenerate just this chapter's monsters"
+                          onClick={() => void handleChapterRegenerate(b, chapterPicker[b.id])}
+                        >
+                              ⚔ RE-SUMMON
+                            </button>
+                          </>
+                        )}
+                        {chapters && chapters.length === 0 && <span style={{ color: 'var(--d-stone-light)' }}>no chapters</span>}
                       </li>
                     );
                   })}

@@ -804,10 +804,32 @@ export async function getLatestAnnouncementTime(guildId: string): Promise<Date |
 /** Coins awarded on every 7th consecutive day of questing. */
 export const STREAK_BONUS_COINS = 50;
 
+/**
+ * Local-midnight day key — the single day-boundary every streak check shares.
+ * "A day" ends at 12:00 AM in the adventurer's own timezone, never UTC and
+ * never the DB session's zone.
+ */
+function localDayMs(d: Date = new Date()): number {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
 export interface StreakInfo {
   currentStreak: number;
   longestStreak: number;
   lastActiveDate: Date | null;
+}
+
+/**
+ * The midnight rule: a streak only stays warm until 12:00 AM of the local day
+ * AFTER the last quested day. Once that boundary passes, the stored counter
+ * reads as 0 everywhere (dashboards, guild board) until the student quests
+ * again — updateStreak then restarts it at 1, or continues it if they quested
+ * yesterday. Applied lazily at read time, so no cron job is needed: the day
+ * boundary itself IS the reset.
+ */
+export function effectiveStreak(info: StreakInfo, now = new Date()): number {
+  if (info.currentStreak < 1 || !info.lastActiveDate) return 0;
+  return localDayMs(info.lastActiveDate) >= localDayMs(now) ? info.currentStreak : 0;
 }
 
 export async function getStreak(userId: string): Promise<StreakInfo> {
@@ -895,18 +917,24 @@ export async function getGuildStreaks(guildId: string): Promise<GuildStreakEntry
      ORDER BY u.current_streak DESC, u.longest_streak DESC, u.name ASC`,
     [guildId],
   );
-  return rows.map((r) => ({
-    userId: String(r.id),
-    name: String(r.name),
-    currentStreak: Number(r.current_streak ?? 0),
-    longestStreak: Number(r.longest_streak ?? 0),
+  return rows.map((r) => {
     // Same LOCAL-day boundary as updateStreak / isStreakAtRisk — one rule
     // everywhere (SQL CURRENT_DATE would use the DB session timezone).
-    questedToday: r.last_active_date != null
-      ? new Date(r.last_active_date as Date).getTime() >= new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).getTime()
-      : false,
-    avatar: r.preferences,
-  }));
+    const lastMs = r.last_active_date != null ? new Date(r.last_active_date as Date).getTime() : null;
+    const todayMs = localDayMs();
+    const stored = Number(r.current_streak ?? 0);
+    // Midnight reset: a streak that survived into a new un-quested day shows
+    // as 0 on the board (longest_streak keeps its record either way).
+    const currentStreak = lastMs != null && stored > 0 && lastMs >= todayMs ? stored : 0;
+    return {
+      userId: String(r.id),
+      name: String(r.name),
+      currentStreak,
+      longestStreak: Number(r.longest_streak ?? 0),
+      questedToday: lastMs != null && lastMs >= todayMs,
+      avatar: r.preferences,
+    };
+  });
 }
 
 /**

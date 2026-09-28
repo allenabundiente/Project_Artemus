@@ -4,10 +4,12 @@ interface Props {
   book: BookDetail;
   progress: Progress;
   term: Term;
+  /** How this book's quests render — shown as a hint on the map. */
+  mapMode?: 'classic' | 'topdown';
   onEnterLevel: (chapterId: string, chapterIdx: number) => void;
 }
 
-export default function WorldMap({ book, progress, term, onEnterLevel }: Props) {
+export default function WorldMap({ book, progress, term, mapMode = 'classic', onEnterLevel }: Props) {
   const done = new Set(progress.completedChapters);
 
   // Teacher quest rules: availability window first, then the quest cap.
@@ -132,7 +134,9 @@ export default function WorldMap({ book, progress, term, onEnterLevel }: Props) 
       </div>
 
       <p className="term-font" style={{ color: 'var(--d-stone-light)' }}>
-        Controls: ←/→ or A/D to move · W to jump. Strike a monster to face its challenge. Wrong answers cost a heart. Reach the castle gate to wake the dungeon boss.
+        {mapMode === 'topdown'
+          ? 'The Depths: explore in 4 directions (WASD/arrows). Clear guarded paths, rune puzzles, and locked chests — 3 trials open the portal; all of them earn the completion bonus.'
+          : 'Controls: ←/→ or A/D to move · W to jump. Strike a monster to face its challenge. Wrong answers cost a heart. Reach the castle gate to wake the dungeon boss.'}
       </p>
     </div>
   );

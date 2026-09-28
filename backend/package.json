@@ -8,6 +8,8 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "migrate": "node scripts/migrate.mjs",
+    "test": "node --import tsx --test src/services/dungeonGenerator.test.ts",
+    "test:watch": "node --import tsx --test --watch src/services/dungeonGenerator.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

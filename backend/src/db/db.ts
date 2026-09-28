@@ -1,11 +1,26 @@
 // Postgres data layer (Supabase-compatible) replacing the old SQLite store.
 // Node-postgres with a connection pool. All schema lives in backend/migrations/*.sql
 // which are applied to Supabase via the SQL editor / CLI.
+//
+// Re-exports the top-down dungeon mode's data layer so callers can import
+// everything from this one module (matches the project's one-import style).
 import pg from 'pg';
+<<<<<<< HEAD
 import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow, CompiledLesson } from './types.js';
 import { sanitizeAvatar } from './admin.js';
 
 export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow, type CompiledLesson, type QuestBlank } from './types.js';
+=======
+import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow } from './types.js';
+import type { BookMapMode } from './dungeon.js';
+
+export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow } from './types.js';
+export {
+  getMapMode, setMapMode, getDungeonMap, insertDungeonMap,
+  deleteDungeonMapsForBook, countDungeonMapsForBook,
+  type BookMapMode,
+} from './dungeon.js';
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
 
 const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/questbook';
 
@@ -101,6 +116,7 @@ export interface BookRow {
   questCount: number | null;
   /** 'general' (any subject) or 'programming' (code-flavored questions). */
   quizMode: QuizMode;
+<<<<<<< HEAD
   /** Teacher take-down: hidden from players and locked for play. */
   locked: boolean;
   /** Optional availability window — null means unbounded on that side. */
@@ -110,10 +126,15 @@ export interface BookRow {
   questChapters: number | null;
   /** Teacher-set cap on playable chapters (quests); null = no cap. */
   questLimit: number | null;
+=======
+  /** How chapters render: 'classic' side-scroll or 'topdown' dungeon crawler. */
+  mapMode: BookMapMode;
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   createdAt: Date;
 }
 
 function mapBook(r: any): BookRow {
+<<<<<<< HEAD
   return {
     id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null,
     questCount: r.quest_count ?? null,
@@ -139,6 +160,9 @@ export function isBookPlayable(book: {
   if (book.availableFrom && now < book.availableFrom) return false;
   if (book.availableUntil && now > book.availableUntil) return false;
   return true;
+=======
+  return { id: r.id, title: r.title, filename: r.filename, ownerId: r.owner_id ?? null, guildId: r.guild_id ?? null, questCount: r.quest_count ?? null,  quizMode: ['programming', 'language'].includes(r.quiz_mode) ? r.quiz_mode : 'general', mapMode: r.map_mode === 'topdown' ? 'topdown' : 'classic', createdAt: r.created_at };
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
 }
 
 export interface UserRow {
@@ -491,6 +515,11 @@ export async function insertGuild(name: string, teacherId: string): Promise<Guil
     }
   }
   throw new Error('Could not generate a unique passcode');
+}
+
+/** Books uploaded before the teacher founded their guild have guild_id NULL — attach them. */
+export async function attachOrphanBooksToGuild(teacherId: string, guildId: string): Promise<void> {
+  await query(`UPDATE books SET guild_id = $2 WHERE owner_id = $1 AND guild_id IS NULL`, [teacherId, guildId]);
 }
 
 export async function regeneratePasscode(guildId: string): Promise<GuildRow> {

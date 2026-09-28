@@ -10,6 +10,11 @@ import { buildLessonOverview } from '../services/lesson.js';
 import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, signToken } from '../services/auth.js';
 import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
 import { registerAdminRoutes, fetchCustomThemes } from './admin.js';
+import { generateDungeonMap, validateDungeonMap } from '../services/dungeonGenerator.js';
+import {
+  getMapMode, setMapMode, getDungeonMap, insertDungeonMap,
+  deleteDungeonMapsForBook, countDungeonMapsForBook,
+} from '../db/dungeon.js';
 import {
   initDbResilient, query, queryOne, withTransaction, applyCoinsTx, insertScoreTx, upsertProgressTx,
   insertBook, insertChapter, insertChallenge, getBook, listBooks, updateBookQuestCount, updateBookQuizMode,
@@ -17,10 +22,14 @@ import {
   getChapters, getChapter, getChallengesForChapter, getChapterWithText,
   countChallenges, deleteChallengesForBook, deleteChallengesForChapter, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
+<<<<<<< HEAD
   insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
   getGuildMessages, getGuildMessagesSince, insertGuildMessage, deleteGuildMessage,
   getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
   getStreak, updateStreak, STREAK_BONUS_COINS, getStreakCalendar, getGuildStreaks, isStreakAtRisk, effectiveStreak,
+=======
+  insertGuild, attachOrphanBooksToGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
   getChallenge, replaceChallenge, nextChallengeOrd,
@@ -382,6 +391,8 @@ export function createApiRouter(): Router {
       const existing = await getGuildByTeacher(req.user!.id);
       if (existing) return res.status(409).json({ error: 'You already lead a guild' });
       const guild = await insertGuild(name, req.user!.id);
+      // Books uploaded before the guild existed belong to it too.
+      await attachOrphanBooksToGuild(req.user!.id, guild.id);
       res.status(201).json({ guild: { id: guild.id, name: guild.name, passcode: guild.passcode, teacherId: guild.teacherId, termSettings: guild.termSettings } });
     } catch (e: any) {
       console.error('[createGuild]', e);
@@ -711,16 +722,166 @@ export function createApiRouter(): Router {
       // Filename detection (${topic}_code.pdf → programming) with explicit
       // teacher override taking precedence.
       const quizMode = detectQuizMode(req.file.originalname, req.body?.quizMode);
+<<<<<<< HEAD
       const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount, quizMode, questChapters);
+=======
+      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount, quizMode);
+      if (req.body?.mapMode === 'topdown') await setMapMode(bookId, 'topdown');
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
       for (let i = 0; i < parsed.chapters.length; i++) {
         const ch = parsed.chapters[i];
         await insertChapter(bookId, i, ch.title, ch.text, ch.codeBlocks);
       }
-      res.json({ bookId, title: parsed.title, quizMode, chapters: parsed.chapters.map((c, i) => ({ idx: i, title: c.title })) });
+      res.json({ bookId, title: parsed.title, quizMode, mapMode: req.body?.mapMode === 'topdown' ? 'topdown' : 'classic', chapters: parsed.chapters.map((c, i) => ({ idx: i, title: c.title })) });
     } catch (e: any) {
       console.error('[upload]', e);
       res.status(400).json({ error: e?.message || 'Failed to parse PDF' });
     }
+  });
+
+  // --- Top-down dungeon mode ("The Depths") --------------------------------------
+
+  /** Same ownership rule as every other per-book route. */
+  async function canTouchBook(book: { ownerId: string | null; guildId: string | null } | null, user: UserRow | null): Promise<boolean> {
+    if (!book || !user) return false;
+    return book.ownerId === user.id || (!!book.guildId && user.guildId === book.guildId);
+  }
+
+  /** Per-book map mode: how its chapters render ('classic' | 'topdown'). */
+  router.get('/books/:id/map-mode', requireAuth, async (req, res) => {
+    const book = await getBook(String(req.params.id));
+    const user = await getUserById(req.user!.id);
+    if (!(await canTouchBook(book, user))) return res.status(book ? 403 : 404).json({ error: 'Not allowed' });
+    res.json({ bookId: book!.id, mapMode: await getMapMode(book!.id) });
+  });
+
+  router.put('/books/:id/map-mode', requireAuth, async (req, res) => {
+    const book = await getBook(String(req.params.id));
+    const user = await getUserById(req.user!.id);
+    if (!(await canTouchBook(book, user))) return res.status(book ? 403 : 404).json({ error: 'Not allowed' });
+    const mode = req.body?.mapMode === 'topdown' ? 'topdown' : 'classic';
+    await setMapMode(book!.id, mode);
+    res.json({ bookId: book!.id, mapMode: mode });
+  });
+
+  /**
+   * Fetch the generated dungeon for a chapter; generate + store it on first
+   * play (lazy) so nothing slows the upload path down.
+   */
+  router.get('/books/:id/chapters/:chapterId/dungeon', requireAuth, async (req, res) => {
+    const chapterId = String(req.params.chapterId);
+    const chapter = await getChapter(chapterId);
+    if (!chapter || chapter.bookId !== String(req.params.id)) return res.status(404).json({ error: 'Chapter not found' });
+    const book = await getBook(chapter.bookId);
+    const user = await getUserById(req.user!.id);
+    if (!(await canTouchBook(book, user))) return res.status(403).json({ error: 'Not allowed' });
+
+    const existing = await getDungeonMap(chapterId);
+    if (existing) return res.json({ bookId: book!.id, chapterId, cached: true, mode: 'stored' as const, map: existing });
+
+    // First play on a book nobody has generated challenges for yet: build
+    // them now so the dungeon gets real monster gates instead of chests only.
+    if ((await countChallenges(book!.id)) === 0) {
+      const term = typeof req.query.term === 'string' ? req.query.term : 'prelims';
+      if (TERMS.includes(term as never)) {
+        const guild = book!.guildId ? await getGuild(book!.guildId) : null;
+        await generateChallengesForBook(book!.id, term, guild?.termSettings ?? null);
+      }
+    }
+    const challenges = await getChallengesForChapter(chapterId);
+    const result = await generateDungeonMap(chapter, {
+      category: book!.quizMode,
+      challenges: challenges.map((c) => ({
+        type: c.type, prompt: c.prompt, options: c.options, correctAnswer: c.correctAnswer, difficulty: c.difficulty,
+      })),
+    });
+    await insertDungeonMap(chapterId, result.map);
+    res.json({ bookId: book!.id, chapterId, cached: false, mode: result.mode, map: result.map });
+  });
+
+  /**
+   * Teacher/admin: regenerate the dungeon for one chapter (a fresh LLM take,
+   * or a new heuristic roll). Also the escape hatch for a broken stored map.
+   */
+  router.post('/books/:id/chapters/:chapterId/dungeon/regenerate', requireAuth, async (req, res) => {
+    const chapterId = String(req.params.chapterId);
+    const chapter = await getChapter(chapterId);
+    if (!chapter || chapter.bookId !== String(req.params.id)) return res.status(404).json({ error: 'Chapter not found' });
+    const book = await getBook(chapter.bookId);
+    const user = await getUserById(req.user!.id);
+    const isOwner = book && book.ownerId === user?.id;
+    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
+    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+
+    const challenges = await getChallengesForChapter(chapterId);
+    const result = await generateDungeonMap(chapter, {
+      category: book!.quizMode,
+      challenges: challenges.map((c) => ({
+        type: c.type, prompt: c.prompt, options: c.options, correctAnswer: c.correctAnswer, difficulty: c.difficulty,
+      })),
+    });
+    await insertDungeonMap(chapterId, result.map);
+    res.json({ chapterId, cached: false, mode: result.mode, map: result.map });
+  });
+
+  /**
+   * Teacher/admin: bulk-generate dungeons for every chapter of a book that
+   * doesn't have one yet (pre-warms the Depths so students never wait).
+   */
+  router.post('/books/:id/dungeon/generate', requireAuth, async (req, res) => {
+    const book = await getBook(String(req.params.id));
+    const user = await getUserById(req.user!.id);
+    const isOwner = book && book.ownerId === user?.id;
+    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
+    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+
+    const chapters = await getChapters(book!.id);
+    let generated = 0;
+    for (const chapter of chapters) {
+      if (await getDungeonMap(chapter.id)) continue;
+      const challenges = await getChallengesForChapter(chapter.id);
+      const result = await generateDungeonMap(chapter, {
+        category: book!.quizMode,
+        challenges: challenges.map((c) => ({
+          type: c.type, prompt: c.prompt, options: c.options, correctAnswer: c.correctAnswer, difficulty: c.difficulty,
+        })),
+      });
+      await insertDungeonMap(chapter.id, result.map);
+      generated++;
+    }
+    res.json({ bookId: book!.id, generated, total: chapters.length, existing: await countDungeonMapsForBook(book!.id) });
+  });
+
+  /** Teacher/admin: wipe stored dungeons for a book (bulk regenerate). */
+  router.post('/books/:id/dungeon/regenerate', requireAuth, async (req, res) => {
+    const book = await getBook(String(req.params.id));
+    const user = await getUserById(req.user!.id);
+    const isOwner = book && book.ownerId === user?.id;
+    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
+    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    await deleteDungeonMapsForBook(book!.id);
+    res.json({ ok: true });
+  });
+
+  /**
+   * Accept a corrected/edited map payload (teacher tweaks a broken LLM puzzle).
+   * Only the event data is taken — positions/dimensions are re-validated so an
+   * unsolvable map can never be persisted.
+   */
+  router.put('/books/:id/chapters/:chapterId/dungeon', requireAuth, async (req, res) => {
+    const chapterId = String(req.params.chapterId);
+    const chapter = await getChapter(chapterId);
+    if (!chapter || chapter.bookId !== String(req.params.id)) return res.status(404).json({ error: 'Chapter not found' });
+    const book = await getBook(chapter.bookId);
+    const user = await getUserById(req.user!.id);
+    const isOwner = book && book.ownerId === user?.id;
+    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
+    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+
+    const map = validateDungeonMap(req.body?.map);
+    if (!map) return res.status(400).json({ error: 'Invalid map payload' });
+    await insertDungeonMap(chapterId, map);
+    res.json({ chapterId, cached: true, mode: 'edited' as const, map });
   });
 
   // --- Generate challenges for a book ---------------------------------------------
@@ -1004,7 +1165,11 @@ export function createApiRouter(): Router {
     const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
 
+<<<<<<< HEAD
     if (req.body?.questCount !== undefined || req.body?.questChapters !== undefined || req.body?.quizMode !== undefined) {
+=======
+    if (req.body?.questCount !== undefined || req.body?.quizMode !== undefined || req.body?.mapMode !== undefined) {
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
       let updated = book;
       if (req.body?.questCount !== undefined) {
         updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount)) ?? book;
@@ -1023,10 +1188,21 @@ export function createApiRouter(): Router {
         if (!mode) return res.status(400).json({ error: 'quizMode must be "general" or "programming"' });
         updated = await updateBookQuizMode(bookId, mode) ?? book;
       }
+      if (req.body?.mapMode !== undefined) {
+        const mode = req.body.mapMode === 'topdown' ? 'topdown' : 'classic';
+        await setMapMode(bookId, mode);
+        updated = (await getBook(bookId)) ?? book;
+      }
       if (!updated) return res.status(500).json({ error: 'Could not save quest settings' });
+<<<<<<< HEAD
       return res.json({ bookId, questCount: updated.questCount, questChapters: updated.questChapters, quizMode: updated.quizMode });
     }
     res.json({ bookId, questCount: book.questCount, questChapters: book.questChapters, quizMode: book.quizMode });
+=======
+      return res.json({ bookId, questCount: updated.questCount, quizMode: updated.quizMode, mapMode: updated.mapMode });
+    }
+    res.json({ bookId, questCount: book.questCount, quizMode: book.quizMode, mapMode: book.mapMode });
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   });
 
   // --- teacher: review / regenerate individual challenges ------------------------

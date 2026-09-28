@@ -1,8 +1,15 @@
 import type {
+<<<<<<< HEAD
   AdminAccount, AuditEntry, AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, FeatureRow,
   GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
   Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
+=======
+  AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, DungeonFetchResult, DungeonMap,
+  FeatureRow, GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus,
+  MapConfig, MapResolve, Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem,
+  TermSettings, ThemeMeta, UploadResult, WardrobeResponse,
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
 } from './types';
 
 const TOKEN_KEY = 'arcade-token';
@@ -262,18 +269,60 @@ export async function getTermSettings(term: string): Promise<{ term: string; set
 
 // --- books -------------------------------------------------------------------------
 
+<<<<<<< HEAD
 export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto', questChapters?: number | null): Promise<UploadResult> {
+=======
+export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto', mapMode?: 'classic' | 'topdown'): Promise<UploadResult> {
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   const form = new FormData();
   form.append('pdf', file);
   if (questCount != null) form.append('questCount', String(questCount));
   if (quizMode && quizMode !== 'auto') form.append('quizMode', quizMode);
+<<<<<<< HEAD
   if (questChapters != null) form.append('questChapters', String(questChapters));
+=======
+  if (mapMode === 'topdown') form.append('mapMode', 'topdown');
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   const res = await fetch('/api/upload', { method: 'POST', body: form, headers: authHeaders() });
   return json<UploadResult>(res);
 }
 
 export async function generateChallenges(bookId: string, term: string = 'prelims', questCount?: number | null): Promise<GenerateResult> {
   return send<GenerateResult>(`/api/books/${bookId}/generate`, 'POST', { term, ...(questCount !== undefined ? { questCount } : {}) });
+}
+
+// --- top-down dungeon mode ("The Depths") ------------------------------------------
+
+/** How this book's chapters render: 'classic' side-scroll or 'topdown' crawler. */
+export async function getMapMode(bookId: string): Promise<{ bookId: string; mapMode: 'classic' | 'topdown' }> {
+  return get(`/api/books/${bookId}/map-mode`);
+}
+
+export async function setMapMode(bookId: string, mapMode: 'classic' | 'topdown'): Promise<{ bookId: string; mapMode: 'classic' | 'topdown' }> {
+  return send(`/api/books/${bookId}/map-mode`, 'PUT', { mapMode });
+}
+
+/**
+ * Fetch the chapter's generated dungeon; the backend lazily generates and
+ * stores it on first request (LLM when configured, heuristics otherwise).
+ */
+export async function getDungeon(bookId: string, chapterId: string, term?: string): Promise<DungeonFetchResult> {
+  return get(`/api/books/${bookId}/chapters/${chapterId}/dungeon${term ? `?term=${encodeURIComponent(term)}` : ''}`);
+}
+
+/** Teacher/admin: discard stored dungeons for a book so the next generate rebuilds them. */
+export async function regenerateDungeons(bookId: string): Promise<{ ok: boolean }> {
+  return send(`/api/books/${bookId}/dungeon/regenerate`, 'POST');
+}
+
+/** Pre-generate dungeons for every chapter that lacks one (teacher/admin). */
+export async function generateDungeons(bookId: string): Promise<{ bookId: string; generated: number; total: number; existing: number }> {
+  return send(`/api/books/${bookId}/dungeon/generate`, 'POST');
+}
+
+/** Teacher/admin: replace one chapter's dungeon with a corrected map payload. */
+export async function saveDungeon(bookId: string, chapterId: string, map: DungeonMap): Promise<DungeonFetchResult> {
+  return send(`/api/books/${bookId}/chapters/${chapterId}/dungeon`, 'PUT', { map });
 }
 
 /** Read or set a book's per-PDF quest settings (quest count; null = auto). */

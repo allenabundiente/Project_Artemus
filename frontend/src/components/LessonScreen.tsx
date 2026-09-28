@@ -6,11 +6,13 @@ interface Props {
   bookId: string;
   chapterId: string;
   chapterIdx: number;
+  /** 'classic' side-scroll or 'topdown' dungeon — chosen by the book's map mode. */
+  mode?: 'classic' | 'topdown';
   onStart: () => void;
   onBack: () => void;
 }
 
-export default function LessonScreen({ bookId, chapterId, chapterIdx, onStart, onBack }: Props) {
+export default function LessonScreen({ bookId, chapterId, chapterIdx, mode = 'classic', onStart, onBack }: Props) {
   const [lesson, setLesson] = useState<LessonOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -148,10 +150,12 @@ export default function LessonScreen({ bookId, chapterId, chapterIdx, onStart, o
         style={{ width: '100%', marginTop: '1.25rem', fontSize: '0.8rem', padding: '0.9rem 0' }}
         onClick={onStart}
       >
-        ⚔ BEGIN THE QUEST
+        {mode === 'topdown' ? '🕯 DESCEND INTO THE DEPTHS' : '⚔ BEGIN THE QUEST'}
       </button>
       <p className="term-font" style={{ textAlign: 'center', color: 'var(--d-stone-light)', marginTop: '0.5rem' }}>
-        Study the briefing — the monsters ahead will quiz you on it.
+        {mode === 'topdown'
+          ? 'Explore the dungeon in 4 directions. Guarded paths ask recall questions, rune pedestals test your sequencing, and chests hold terms you must spell.'
+          : 'Study the briefing — the monsters ahead will quiz you on it.'}
       </p>
     </div>
   );

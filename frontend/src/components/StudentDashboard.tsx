@@ -10,6 +10,7 @@ import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import WorldMap from './WorldMap';
 import LevelScreen from './LevelScreen';
 import LessonScreen from './LessonScreen';
+import DungeonScreen from './DungeonScreen';
 import Leaderboard from './Leaderboard';
 import GuildChat from './GuildChat';
 import Announcements from './Announcements';
@@ -34,8 +35,8 @@ interface Props {
 type View =
   | { name: 'home' }
   | { name: 'map'; bookId: string }
-  | { name: 'lesson'; bookId: string; chapterId: string; chapterIdx: number }
-  | { name: 'level'; bookId: string; chapterId: string; chapterIdx: number }
+  | { name: 'lesson'; bookId: string; chapterId: string; chapterIdx: number; mode: 'classic' | 'topdown' }
+  | { name: 'level'; bookId: string; chapterId: string; chapterIdx: number; mode: 'classic' | 'topdown' }
   | { name: 'leaderboard' }
   | { name: 'shop' }
   | { name: 'wardrobe' };
@@ -140,6 +141,9 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
       setError((e as Error).message);
     }
   }, []);
+
+  /** How this book renders: top-down Depths when the book says so, else classic. */
+  const modeFor = (b: BookMeta | null, bookId: string): 'classic' | 'topdown' => (b?.mapMode ?? 'classic') as 'classic' | 'topdown';
 
   async function handleUpload(file: File) {
     setError(null);
@@ -437,7 +441,8 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           book={book}
           progress={progress}
           term={term}
-          onEnterLevel={(chapterId, chapterIdx) => setView({ name: 'lesson', bookId: book.id, chapterId, chapterIdx })}
+          mapMode={book.mapMode ?? 'classic'}
+          onEnterLevel={(chapterId, chapterIdx) => setView({ name: 'lesson', bookId: book.id, chapterId, chapterIdx, mode: book.mapMode ?? 'classic' })}
         />
       )}
 
@@ -446,12 +451,25 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           bookId={view.bookId}
           chapterId={view.chapterId}
           chapterIdx={view.chapterIdx}
-          onStart={() => setView({ name: 'level', bookId: view.bookId, chapterId: view.chapterId, chapterIdx: view.chapterIdx })}
+          mode={view.mode}
+          onStart={() => setView({ name: 'level', bookId: view.bookId, chapterId: view.chapterId, chapterIdx: view.chapterIdx, mode: view.mode })}
           onBack={() => setView({ name: 'map', bookId: view.bookId })}
         />
       )}
 
-      {view.name === 'level' && (
+      {view.name === 'level' && view.mode === 'topdown' && (
+        <DungeonScreen
+          bookId={view.bookId}
+          chapterId={view.chapterId}
+          chapterIdx={view.chapterIdx}
+          term={term}
+          onExit={() => setView({ name: 'map', bookId: view.bookId })}
+          onComplete={onQuestComplete}
+          onFailSettled={onQuestFailSettled}
+        />
+      )}
+
+      {view.name === 'level' && view.mode !== 'topdown' && (
         <LevelScreen
           bookId={view.bookId}
           chapterId={view.chapterId}

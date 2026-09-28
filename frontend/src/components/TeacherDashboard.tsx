@@ -8,8 +8,12 @@ import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import Wardrobe from './Wardrobe';
 import RoyalGate from './RoyalGate';
 import ChallengeReview from './ChallengeReview';
+<<<<<<< HEAD
 import Announcements from './Announcements';
 import GuildChat from './GuildChat';
+=======
+import DungeonMapEditor from './DungeonMapEditor';
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
 
 interface Props {
   user: AuthUser;
@@ -18,12 +22,14 @@ interface Props {
   onSignOut: () => void;
 }
 
-type View = 'home' | 'settings' | 'leaderboard' | 'wardrobe' | 'review';
+type View = 'home' | 'settings' | 'leaderboard' | 'wardrobe' | 'review' | 'mapeditor';
 
 export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut }: Props) {
   const [view, setView] = useState<View>('home');
   /** Which tome the review screen is open on. */
   const [reviewBook, setReviewBook] = useState<string | null>(null);
+  /** Which tome the dungeon map editor is open on. */
+  const [editBook, setEditBook] = useState<string | null>(null);
   const [guildName, setGuildName] = useState('');
   const [passcode, setPasscode] = useState(guild?.passcode ?? '');
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -38,6 +44,8 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
   const [uploadQuestChapters, setUploadQuestChapters] = useState('');
   /** Quiz mode for the NEXT upload ('auto' = detect from filename). */
   const [uploadQuizMode, setUploadQuizMode] = useState<'auto' | QuizMode>('auto');
+  /** Map style for the NEXT upload: classic side-scroll or top-down Depths. */
+  const [uploadMapMode, setUploadMapMode] = useState<'classic' | 'topdown'>('classic');
   /** Per-tome quest count edits (bookId → select value, '' = auto). */
   const [bookCounts, setBookCounts] = useState<Record<string, string>>({});
   /** Per-tome quest-chapter edits (bookId → select value, '' = auto). */
@@ -123,8 +131,12 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     setBusy('Deciphering the ancient tome…');
     try {
       const questCount = uploadQuestCount ? Number(uploadQuestCount) : null;
+<<<<<<< HEAD
       const questChapters = uploadQuestChapters ? Number(uploadQuestChapters) : null;
       const up = await api.uploadPdf(file, questCount, uploadQuizMode, questChapters);
+=======
+      const up = await api.uploadPdf(file, questCount, uploadQuizMode, uploadMapMode);
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
       setBusy('Summoning monsters…');
       const gen = await api.generateChallenges(up.bookId, term);
       const modeNote = up.quizMode === 'programming' ? ' programming mode' : up.quizMode === 'language' ? ' language mode' : '';
@@ -243,6 +255,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     }
   }
 
+<<<<<<< HEAD
   /** Lazy-load a tome's chapter list for the single-chapter regenerate picker. */
   async function ensureBookChapters(bookId: string): Promise<ChapterMeta[]> {
     const cached = bookChapters[bookId];
@@ -262,6 +275,23 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       setNotice(`"${chapter?.title ?? 'Chapter'}" re-summoned — ${res.challengeCount} fresh monsters. The rest of the tome is untouched.`);
       await refreshGuildData();
       await ensureBookChapters(book.id); // refresh the cached chapter list
+=======
+  /** Flip a tome between the classic side-scroll and the top-down Depths. */
+  async function handleMapMode(book: BookMeta) {
+    const next = book.mapMode === 'topdown' ? 'classic' : 'topdown';
+    setError(null);
+    if (next === 'topdown') setBusy(`Forging the Depths of "${book.title}"…`);
+    try {
+      await api.setMapMode(book.id, next);
+      if (next === 'topdown') {
+        // Pre-forge dungeons for every chapter so students never wait on first play.
+        const gen = await api.generateDungeons(book.id);
+        setNotice(`"${book.title}" now descends into THE DEPTHS — ${gen.generated} dungeon${gen.generated === 1 ? '' : 's'} forged (${gen.total} quests).`);
+      } else {
+        setNotice(`"${book.title}" returned to the classic side-scrolling quests.`);
+      }
+      await refreshGuildData();
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -269,6 +299,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     }
   }
 
+<<<<<<< HEAD
   // Render a UTC instant as a datetime-local input value (no TZ suffix).
   function toLocalInput(iso: string | null | undefined): string {
     if (!iso) return '';
@@ -277,6 +308,8 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+=======
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   return (
     <div style={{ minHeight: '100vh', padding: '1.5rem', position: 'relative' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
@@ -384,6 +417,16 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                   <option value="general">GENERAL</option>
                   <option value="programming">PROGRAMMING</option>
                   <option value="language">LANGUAGE</option>
+                </select>
+                <select
+                  className="pixel-select"
+                  value={uploadMapMode}
+                  onChange={(e) => setUploadMapMode(e.target.value as 'classic' | 'topdown')}
+                  style={{ marginRight: '0.4rem' }}
+                  title="How this tome renders: classic side-scroll, or the top-down Depths dungeon"
+                >
+                  <option value="classic">MAP: CLASSIC</option>
+                  <option value="topdown">MAP: THE DEPTHS</option>
                 </select>
                 <button className="pixel-btn" style={{ fontSize: '0.65rem' }} onClick={() => fileRef.current?.click()} disabled={!!busy}>
                   {busy ?? 'UPLOAD QUEST (PDF)'}
@@ -517,6 +560,7 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                         >
                           {chapters ? '↻' : '▾'} CHAPTERS
                         </button>
+<<<<<<< HEAD
                         {chapters && (
                           <>
                             <select
@@ -545,6 +589,38 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                           </>
                         )}
                         {chapters && chapters.length === 0 && <span style={{ color: 'var(--d-stone-light)' }}>no chapters</span>}
+=======
+                        <button
+                          className="pixel-btn pixel-btn--ghost"
+                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                          title={`Map style: ${b.mapMode === 'topdown' ? 'top-down Depths (4-direction dungeon)' : 'classic side-scroller'}. Click to toggle.`}
+                          onClick={() => void handleMapMode(b)}
+                          disabled={!!busy}
+                        >
+                          {b.mapMode === 'topdown' ? '🕯→⚔' : '⚔→🕯'}
+                        </button>
+                        <button
+                          className="pixel-btn pixel-btn--ghost"
+                          style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                          title="Review the challenges and re-summon any bad ones"
+                          onClick={() => { setReviewBook(b.id); setView('review'); }}
+                        >
+                          🔍 REVIEW
+                        </button>
+                        {b.mapMode === 'topdown' && (
+                          <button
+                            className="pixel-btn pixel-btn--ghost"
+                            style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                            title="Edit this tome's Depths dungeons: drag events and traps on the map"
+                            onClick={async () => {
+                              setEditBook(b.id);
+                              setView('mapeditor');
+                            }}
+                          >
+                            🗺 MAPS
+                          </button>
+                        )}
+>>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
                       </li>
                     );
                   })}
@@ -561,6 +637,14 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
           term={term}
           onBack={() => setView('home')}
           onRegenerated={() => setNotice('Fresh challenge summoned in its place.')}
+        />
+      )}
+
+      {view === 'mapeditor' && editBook && (
+        <DungeonMapEditor
+          key={editBook}
+          bookId={editBook}
+          onExit={() => setView('home')}
         />
       )}
 

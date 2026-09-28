@@ -30,11 +30,58 @@ export interface BookMeta {
   availableUntil: string | null;
   /** 'general' (any subject) or 'programming' (code-flavored questions). */
   quizMode: QuizMode;
+  /** How chapters render: 'classic' side-scroll or 'topdown' dungeon crawler. */
+  mapMode?: 'classic' | 'topdown';
   createdAt: string;
   /** Teacher-set quest cap; null/undefined = unlimited. */
   questLimit?: number | null;
   /** Total challenges across the tome (0 = "no monsters" — needs regeneration). */
   challengeCount?: number;
+}
+
+// --- top-down dungeon mode ("The Depths") --------------------------------------
+
+export type DungeonEventType = 'monster_gate' | 'rune_socket' | 'chest_lock';
+
+export interface DungeonEventData {
+  // monster_gate
+  question?: string;
+  options?: string[];
+  correct_index?: number;
+  damage_on_fail?: number;
+  enemy_sprite?: string;
+  // rune_socket
+  prompt?: string;
+  scrambled_items?: string[];
+  correct_sequence?: string[];
+  // chest_lock
+  target_word?: string;
+  hint?: string;
+  allowed_mistakes?: number;
+  reward?: string;
+}
+
+export interface DungeonEvent {
+  event_id: string;
+  type: DungeonEventType;
+  grid_position: { x: number; y: number };
+  data: DungeonEventData;
+}
+
+export interface DungeonMap {
+  quest_meta: { title: string; category: string; recommended_tileset: string };
+  map_dimensions: { width: number; height: number };
+  dungeon_events: DungeonEvent[];
+  /** Spike-trap tiles — passable but harmful unless the surge shield is up. */
+  traps?: { x: number; y: number }[];
+}
+
+export interface DungeonFetchResult {
+  bookId: string;
+  chapterId: string;
+  cached: boolean;
+  mode: 'stored' | 'llm' | 'heuristic' | 'edited';
+  map: DungeonMap;
 }
 
 export interface ChapterMeta {

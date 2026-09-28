@@ -24,6 +24,7 @@ It's built for two kinds of people:
 - **Guilds** — one guild per student. Solo players are their own guild; teacher-led guilds share a passcode and share the books the teacher assigns.
 - **Realm map** — one quest node per chapter. Beat a quest, the next one unlocks.
 - **Side-scrolling quests** — run, jump, collect coins, dodge pits. Hit a patrolling goblin, slime, or bat and you're pulled into a turn-based battle.
+- **The Depths (top-down mode)** — every book can be played as a top-down 16×16 pixel dungeon crawler instead. The LLM turns each chapter into a map of Monster Gates, Rune Sockets, and Chest Locks; clear events, grab 3 keys, reach the portal.
 - **Turn-based battles** — the monster asks a real question drawn from the book: multiple choice, predict-the-output, spot-the-bug, fill-in-the-blank. Nail it and you land a direct hit (3 hits takes it down). Miss and you lose a heart.
 - **Dungeon boss** — the castle gate wakes the boss: hardest questions first, a 3-hit HP bar. Win and the quest clears, the treasure drops.
 - **Scoring** — per quest it's basically `base − mistakes·penalty − (over par ? penalty) − (incomplete ? penalty) − (out of life ? penalty) + lives·bonus`, scaled by the term's points multiplier. Cumulative per-term score pushes you up through Copper → Iron → Gold → Diamond → Mythril with pixel shield-crest badges.
@@ -33,6 +34,28 @@ It's built for two kinds of people:
 ### Controls
 
 ←/→ or A/D to move · Space/↑/W to jump · FLEE to bail out of a battle · quest timer runs per the term's settings · 🔊 toggles chiptune SFX · CRT toggle for scanlines.
+
+Top-down (The Depths): WASD or arrow keys for 4-directional movement (on-screen D-pad on touch devices) · walk into a marker to trigger its event · FLEE applies in battle dialogs as usual.
+
+## The Depths — top-down dungeon mode
+
+Classic mode is a side-scroller; **top-down mode** reimagines each chapter as a single-screen 16×16-tile dungeon floor rendered on the same canvas (scaled with `image-rendering: pixelated` for that SNES feel).
+
+**Switching modes:** teachers pick the map style at upload time (`Map style` select) or toggle any book later with the ⚔/🕯 button on the teacher dashboard. Switching a book to top-down pre-generates dungeon maps for all its chapters; students just play. The setting is per book (`books.map_mode` = `classic` | `topdown`).
+
+**Three event types**, chosen by the LLM to fit the content:
+
+- **⚔ Monster Gate** — a guard blocks the way with a fast-recall multiple-choice question. Answer right and it dies instantly; miss and you lose a heart (and the gate stays).
+- **🔶 Rune Socket** — a sequence-reordering pedestal. Coding books scramble code lines (`for i` / `in range(5):` / `print(i)`); general books get chronologies or step ordering. Rebuild the correct order to clear it.
+- **🧰 Chest Lock** — Hangaroo-style word completion for key terms and vocabulary. Guess letters A–Z to reveal the target word; 3 wrong letters opens it anyway (with a heart lost) but no reward bonus.
+
+**How a run plays:** explore the floor, clear events to earn keys, and once you hold **3 keys** the portal unlocks — step in to finish the quest. You have 3 hearts; run out and the quest fails (scored through the same pipeline as classic mode, so coins, streaks, and ranks all still work).
+
+**Surge gauge:** consecutive correct answers charge the meter. While it glows you move noticeably faster AND wear a shield field that lets you walk through spike traps unharmed — chain answers to sprint a route the spikes would otherwise forbid. A wrong answer (or a trap hit without the shield) drains the gauge.
+
+**Map generation:** each chapter's map is generated lazily on first play (building the chapter's quiz challenges first if they don't exist yet) and cached in the `dungeon_maps` table, so it's identical for every student who replays it. When LLM credentials aren't configured (or generation fails), a deterministic heuristic builder constructs the map from the chapter's existing challenges and keywords — every floor is guaranteed at least one monster gate — so the mode always works. The generator and validator have unit tests: `cd backend && npm test`. Teachers can force a fresh map for one chapter or all chapters via the regenerate endpoints; they can also hand-edit a map's JSON directly (it's re-validated before saving).
+
+**Art:** the dungeon renders real 16×16 pixel-art tiles, monsters, chests, spikes, torches, and the hero from `frontend/public/dungeon/` (the classic 2D Pixel Dungeon Asset Pack). If those files are missing the engine transparently falls back to the built-in authored tileset in `frontend/src/game/dungeonTileset.ts`, so the game never breaks.
 
 ## Quick start — clone to playing in ~5 minutes
 

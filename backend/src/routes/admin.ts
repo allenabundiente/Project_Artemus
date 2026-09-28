@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   listFeatures, isFeatureLocked, setFeatureLock,
-  listShopItems, upsertShopItem, deleteShopItem,
+  listShopItems, upsertShopItem, deleteShopItem, SHOP_CATEGORIES,
   purchaseItem, getUserItemIds,
   getPreferences, setPreferences, sanitizeAvatar,
   getGlobalMapConfig, setGlobalMapConfig, getGuildMapSettings, setGuildMapTheme,
@@ -29,6 +29,7 @@ import { withTransaction } from '../db/db.js';
 import {
   ALL_SETS, findSet, setsForSkus,
   seedWardrobeItems, WARDROBE_COLORS, type AvatarPart,
+  CHARACTER_SKINS, findCharacterSkin, characterSkinOwned, seedCharacterSkins,
 } from '../services/wardrobe.js';
 import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, signToken } from '../services/auth.js';
 import { getUserByEmail, getUserById, addCoins } from '../db/db.js';
@@ -83,10 +84,12 @@ async function spriteMeta(): Promise<Record<string, number>> {
 }
 
 export function seedShop(): void {
-  // Wardrobe catalog seeds at boot so the shop is never empty (idempotent).
+  // Wardrobe catalog (parts + whole-character skins) seeds at boot so the
+  // shop is never empty (idempotent).
   void (async () => {
     try {
       for (const item of seedWardrobeItems()) await upsertShopItem(item);
+      for (const item of seedCharacterSkins()) await upsertShopItem(item);
     } catch (e) {
       console.error('[shop] seed failed (db offline?):', (e as Error).message);
     }
@@ -589,7 +592,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     const b = req.body ?? {};
     const sku = typeof b.sku === 'string' && /^[a-z0-9_]{1,40}$/.test(b.sku) ? b.sku : null;
     const name = typeof b.name === 'string' && b.name.trim().length > 0 ? b.name.trim().slice(0, 60) : null;
-    const category = ['hair', 'armor', 'helmet', 'cape', 'pack'].includes(b.category) ? b.category : null;
+    const category = ['hair', 'armor', 'helmet', 'cape', 'pack', 'character'].includes(b.category) ? b.category : null;
     const kind = typeof b.kind === 'string' && /^[a-z0-9_:]{1,60}$/.test(b.kind) ? b.kind : null;
     const price = Number(b.price);
     if (!sku || !name || !category || !kind || !Number.isFinite(price) || price < 0) {
@@ -615,7 +618,7 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     if (await isFeatureLocked('shop')) return res.status(423).json({ error: 'locked', feature: 'shop' });
     const user = await getUserById(req.user!.id);
     const [items, owned] = await Promise.all([listShopItems(), getUserItemIds(req.user!.id)]);
-    res.json({ coins: user?.coins ?? 0, items, owned });
+    res.json({ coins: user?.coins ?? 0, items: items.filter((i) => SHOP_CATEGORIES.has(i.category)), owned });
   });
 
   router.post('/shop/purchase', requireAuth, async (req, res) => {
@@ -638,9 +641,12 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
     const ownedIds = await getUserItemIds(user.id);
     const items = await listShopItems();
     const ownedSkus = items.filter((i) => ownedIds.includes(i.id)).map((i) => i.sku);
+    const ownedSkins = CHARACTER_SKINS.filter((c) => ownedSkus.includes(c.sku)).map((c) => c.id);
     res.json({
       sets: ALL_SETS,
       unlocked: setsForSkus(ownedSkus),
+      skins: CHARACTER_SKINS,
+      unlockedSkins: ownedSkins,
       colors: WARDROBE_COLORS,
       avatar: sanitizeAvatar((user.preferences as { avatar?: unknown })?.avatar ?? user.preferences),
     });
@@ -660,6 +666,11 @@ export function registerAdminRoutes(router: Router, opts: { importLegacyThemes?:
       if (chosen && chosen.price > 0 && !ownedSkus.has(chosen.sku)) {
         return res.status(403).json({ error: `"${chosen.name}" is not unlocked yet` });
       }
+    }
+    // Whole-character skins follow the same ownership rule.
+    if (!characterSkinOwned(avatar.character, ownedSkus)) {
+      const skin = findCharacterSkin(String(avatar.character));
+      return res.status(403).json({ error: `"${skin?.name ?? 'That character'}" is not unlocked yet` });
     }
     const prefs = { ...(await getPreferences(user.id)), avatar };
     await setPreferences(user.id, prefs);

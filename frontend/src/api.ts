@@ -325,6 +325,11 @@ export async function saveDungeon(bookId: string, chapterId: string, map: Dungeo
   return send(`/api/books/${bookId}/chapters/${chapterId}/dungeon`, 'PUT', { map });
 }
 
+/** Teacher/admin: discard this chapter's dungeon and generate a fresh one now. */
+export async function regenerateChapterDungeon(bookId: string, chapterId: string): Promise<DungeonFetchResult> {
+  return send<DungeonFetchResult>(`/api/books/${bookId}/chapters/${chapterId}/dungeon/regenerate`, 'POST');
+}
+
 /** Read or set a book's per-PDF quest settings (quest count; null = auto). */
 export async function setBookQuestCount(bookId: string, questCount: number | null, quizMode?: QuizMode, questChapters?: number | null): Promise<{ bookId: string; questCount: number | null; questChapters: number | null; quizMode: QuizMode }> {
   return send(`/api/books/${bookId}/settings`, 'PUT', {

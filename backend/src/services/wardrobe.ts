@@ -54,6 +54,16 @@ export function findSet(part: AvatarPart, id: string): AvatarSetDef | undefined 
   return ALL_SETS[part].find((s) => s.id === id);
 }
 
+/**
+ * `true` when the avatar's `character` choice is legit: 'none'/'knight' are the
+ * free default, anything else must be a catalog skin the user owns.
+ */
+export function characterSkinOwned(character: unknown, ownedSkus: Set<string>): boolean {
+  if (typeof character !== 'string' || character === 'none' || character === 'knight') return true;
+  const skin = findCharacterSkin(character);
+  return !!skin && ownedSkus.has(skin.sku);
+}
+
 /** Which owned SKUs unlock which sets, flattened for the client. */
 export function setsForSkus(ownedSkus: string[]): Record<AvatarPart, string[]> {
   const has = new Set(ownedSkus);
@@ -82,6 +92,45 @@ export function seedWardrobeItems() {
         sort: 1,
       })),
   );
+}
+
+// --- buyable dungeon characters ------------------------------------------------
+//
+// The asset pack's other hero designs (frontend/public/dungeon/character2.png,
+// rendered by frontend/src/game/packAvatar.ts) sold as full-character skins.
+// The pack knight stays free for everyone; these replace the whole in-game and
+// profile sprite when equipped. Mirrors DUNGEON_CHARACTERS in dungeonAssets.ts.
+
+export interface CharacterSkinDef {
+  id: string;
+  name: string;
+  sku: string;
+  price: number;
+  description: string;
+}
+
+export const CHARACTER_SKINS: CharacterSkinDef[] = [
+  { id: 'wanderer',    name: 'Hooded Wanderer', sku: 'skin_wanderer',    price: 60,  description: 'A silent traveller whose lantern never gutters.' },
+  { id: 'warden',      name: 'Brimward Warden', sku: 'skin_warden',      price: 90,  description: 'Wide-brimmed keeper of the deep roads.' },
+  { id: 'sword_squire', name: 'Sword Squire',   sku: 'skin_sword_squire', price: 120, description: 'Fresh to the order, sharp of blade and spirit.' },
+  { id: 'rogue_blade', name: 'Rogue Blade',    sku: 'skin_rogue_blade', price: 150, description: 'A duelist who learned the dark alleys first.' },
+];
+
+export function findCharacterSkin(id: string): CharacterSkinDef | undefined {
+  return CHARACTER_SKINS.find((c) => c.id === id);
+}
+
+/** Shop rows for the character skins (seeded at boot, idempotent). */
+export function seedCharacterSkins() {
+  return CHARACTER_SKINS.map((c, i) => ({
+    sku: c.sku,
+    name: c.name,
+    description: c.description,
+    category: 'character' as const,
+    kind: `skin:${c.id}`,
+    price: c.price,
+    sort: i,
+  }));
 }
 
 /** Themed color swatches for the wardrobe picker (heraldic palette). */

@@ -1,33 +1,54 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
-import type { AuthUser, ShopItem } from '../types';
+import type { AuthUser, AvatarPrefs, ShopItem } from '../types';
 import { spriteDataUrl } from '../game/sprites';
 import { composeAvatar, type AvatarConfig, type AvatarFrame } from '../game/avatar';
 import { celebratePurchase } from '../game/celebrate';
 import { onHudCoins } from '../game/hudCoins';
+import { packAssetsOnce, packAvatarDataUrl, enforceSkinOwnership, activeCharacter, composePackCharacterFrame } from '../game/packAvatar';
+import type { LoadedDungeonAssets } from '../game/dungeonAssets';
+import { findDungeonCharacter } from '../game/dungeonAssets';
 
 interface Props {
   user: AuthUser;
   onUserUpdated: (user: AuthUser) => void;
 }
 
-/** Tiny live preview of the player's avatar (idle frame). */
+/** Live pixel preview of a buyable pack character (shop card thumbnail). */
+function SkinThumb({ id, size = 36 }: { id: string; size?: number }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void packAssetsOnce();
+    void packAvatarDataUrl(id).then((u) => alive && setUrl(u));
+    return () => { alive = false; };
+  }, [id]);
+  if (!url) return <div style={{ width: size, height: size, flexShrink: 0 }} />;
+  return <img src={url} alt="" width={size} height={size} style={{ imageRendering: 'pixelated', flexShrink: 0 }} />;
+}
+
+/** Tiny live preview of the player's avatar (idle frame or equipped skin). */
 function AvatarPreview({ avatar, size = 64 }: { avatar: AvatarConfig; size?: number }) {
   const [frame, setFrame] = useState<AvatarFrame>('idle');
   const [sprites, setSprites] = useState<Record<string, HTMLImageElement> | null>(null);
+  const [pack, setPack] = useState<LoadedDungeonAssets | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     api.getWardrobe().catch(() => null);
     import('../game/sprites').then((m) => m.loadSprites()).then((s) => { if (!cancelled) setSprites(s); });
+    void packAssetsOnce().then((p) => { if (!cancelled) setPack(p); });
     const t = window.setInterval(() => {
       setFrame((f) => (f === 'idle' ? 'run1' : f === 'run1' ? 'run2' : f === 'run2' ? 'run3' : f === 'run3' ? 'run4' : 'idle'));
     }, 350);
     return () => { cancelled = true; window.clearInterval(t); };
   }, []);
 
-  if (!sprites) return <div style={{ width: size, height: size }} />;
-  const cv = composeAvatar(frame, avatar, sprites);
+  const skin = activeCharacter(avatar as AvatarPrefs);
+  const packFrame = pack && skin ? composePackCharacterFrame(frame, skin, pack) : null;
+
+  if (!sprites && !packFrame) return <div style={{ width: size, height: size }} />;
+  const cv = packFrame ?? composeAvatar(frame, avatar, sprites!);
   return (
     <img
       src={cv.toDataURL()}
@@ -45,6 +66,7 @@ const CATEGORY_LABEL: Record<ShopItem['category'], string> = {
   helmet: '⛑ Helmets',
   cape: '🧣 Capes',
   pack: '📦 Bundles',
+  character: '🧙 Characters',
 };
 
 export default function Shop({ user, onUserUpdated }: Props) {
@@ -78,6 +100,16 @@ export default function Shop({ user, onUserUpdated }: Props) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  // A purchase just granted a skin: re-check that the equipped character is
+  // owned (covers buying in another tab, or stale preferences).
+  useEffect(() => {
+    void enforceSkinOwnership(user.avatar as AvatarPrefs, async (a) => {
+      await api.saveWardrobe(a);
+      onUserUpdated({ ...user, avatar: a });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [owned.join(',')]);
+
   async function buy(item: ShopItem) {
     setError(null);
     setNotice(null);
@@ -102,7 +134,7 @@ export default function Shop({ user, onUserUpdated }: Props) {
     }
   }
 
-  const categories: ShopItem['category'][] = ['hair', 'armor', 'helmet', 'cape', 'pack'];
+  const categories: ShopItem['category'][] = ['character', 'hair', 'armor', 'helmet', 'cape', 'pack'];
 
   // First paint on slow phones: the fetch hasn't landed yet. Render a skeleton
   // with the real panel chrome instead of collapsing to just the header (the
@@ -145,11 +177,15 @@ export default function Shop({ user, onUserUpdated }: Props) {
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
               {list.map((item) => {
                 const isOwned = owned.includes(item.id);
+                const skinId = item.category === 'character' && item.kind.startsWith('skin:') ? item.kind.slice(5) : null;
                 return (
                   <li key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{ minWidth: 0 }}>
-                      <p className="pixel-font" style={{ fontSize: '0.65rem', margin: 0 }}>{item.name}</p>
-                      <p className="term-font" style={{ fontSize: '0.85rem', margin: 0, color: 'var(--d-stone-light)' }}>{item.description}</p>
+                    <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {skinId && <SkinThumb id={skinId} />}
+                      <div style={{ minWidth: 0 }}>
+                        <p className="pixel-font" style={{ fontSize: '0.65rem', margin: 0 }}>{item.name}</p>
+                        <p className="term-font" style={{ fontSize: '0.85rem', margin: 0, color: 'var(--d-stone-light)' }}>{item.description}</p>
+                      </div>
                     </div>
                     {isOwned ? (
                       <span className="pixel-font" style={{ fontSize: '0.6rem', color: 'var(--d-green, #7fdc6a)', whiteSpace: 'nowrap' }}>✔ OWNED</span>

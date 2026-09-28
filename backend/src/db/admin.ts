@@ -32,7 +32,7 @@ export interface ShopItemRow {
   sku: string;
   name: string;
   description: string;
-  category: 'hair' | 'armor' | 'helmet' | 'pack';
+  category: 'hair' | 'armor' | 'helmet' | 'cape' | 'pack' | 'character';
   kind: string;
   price: number;
   sort: number;
@@ -41,6 +41,9 @@ export interface ShopItemRow {
 export async function listShopItems(): Promise<ShopItemRow[]> {
   return query(`SELECT id, sku, name, description, category, kind, price, sort FROM shop_items ORDER BY category, sort, price`);
 }
+
+/** Shop rows visible to clients. 'character' rows surface in the skin tab. */
+export const SHOP_CATEGORIES = new Set(['hair', 'armor', 'helmet', 'cape', 'pack', 'character']);
 
 export async function upsertShopItem(item: {
   sku: string; name: string; description?: string; category: string; kind: string; price: number; sort?: number;
@@ -113,6 +116,8 @@ export interface AvatarPrefs {
   helmet: string;
   cape: string;
   color: string;
+  /** Buyable pack-character skin; 'none' = default (free) knight. */
+  character?: string;
 }
 
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
@@ -128,6 +133,7 @@ export function sanitizeAvatar(p: unknown): AvatarPrefs {
     helmet: s(v.helmet, 'none'),
     cape: s(v.cape, 'none'),
     color: typeof v.color === 'string' && COLOR_RE.test(v.color) ? v.color.toLowerCase() : '#e8b43c',
+    character: s(v.character, 'none'),
   };
 }
 

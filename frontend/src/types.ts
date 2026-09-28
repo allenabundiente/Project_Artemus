@@ -159,9 +159,19 @@ export interface AvatarPrefs {
   helmet: string;
   cape: string;
   color: string;
+  /** Buyable pack-character skin; 'none' = the default (free) knight. */
+  character?: string;
 }
 
 export interface AvatarSetDef {
+  id: string;
+  name: string;
+  sku: string;
+  price: number;
+  description: string;
+}
+
+export interface CharacterSkinDef {
   id: string;
   name: string;
   sku: string;
@@ -174,7 +184,7 @@ export interface ShopItem {
   sku: string;
   name: string;
   description: string;
-  category: 'hair' | 'armor' | 'helmet' | 'cape' | 'pack';
+  category: 'hair' | 'armor' | 'helmet' | 'cape' | 'pack' | 'character';
   kind: string;
   price: number;
   sort: number;
@@ -183,6 +193,10 @@ export interface ShopItem {
 export interface WardrobeResponse {
   sets: Record<AvatarPart, AvatarSetDef[]>;
   unlocked: Record<AvatarPart, string[]>;
+  /** Whole-character skins from the asset pack (buy in the shop). */
+  skins: CharacterSkinDef[];
+  /** Skin ids the user owns. */
+  unlockedSkins: string[];
   colors: { hex: string; name: string }[];
   avatar: AvatarPrefs;
 }

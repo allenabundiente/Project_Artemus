@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api';
-import type { AvatarPart, AvatarPrefs, AvatarSetDef, WardrobeResponse } from '../types';
+import type { AvatarPart, AvatarPrefs, AvatarSetDef, CharacterSkinDef, WardrobeResponse } from '../types';
 import { composeAvatar, type AvatarConfig, type AvatarFrame } from '../game/avatar';
+import { packAssetsOnce, packAvatarDataUrl, enforceSkinOwnership } from '../game/packAvatar';
 
 interface Props {
   initial: AvatarPrefs;
@@ -51,6 +52,70 @@ function ColorPicker({ colors, value, onChange }: { colors: { hex: string; name:
           style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
         />
       </label>
+    </div>
+  );
+}
+
+/** The buyable whole-character skins (asset-pack heroes). Equipping one replaces the layered look in both game modes. */
+function SkinChooser({ skins, unlocked, active, onPick, onGoShopping }: {
+  skins: CharacterSkinDef[];
+  unlocked: string[];
+  active: string | null;
+  onPick: (id: string | null) => void;
+  onGoShopping: () => void;
+}) {
+  const [previews, setPreviews] = useState<Record<string, string | null>>({});
+  useEffect(() => {
+    let alive = true;
+    void packAssetsOnce();
+    void (async () => {
+      const entries = await Promise.all(skins.map(async (s) => [s.id, await packAvatarDataUrl(s.id, 48)] as const));
+      if (alive) setPreviews(Object.fromEntries(entries));
+    })();
+    return () => { alive = false; };
+  }, [skins]);
+
+  return (
+    <div className="pixel-panel" style={{ marginBottom: '1rem' }}>
+      <p className="pixel-font" style={{ fontSize: '0.7rem', margin: '0 0 0.5rem' }}>🧙 CHARACTER</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '0.5rem' }}>
+        <button
+          onClick={() => onPick(null)}
+          className="pixel-btn pixel-btn--ghost"
+          style={{ textTransform: 'none', fontSize: '0.6rem', textAlign: 'left', borderColor: active === null ? 'var(--d-gold, #ffd700)' : undefined }}
+        >
+          {active === null ? '▸ ' : ''}Classic Knight
+          <span className="term-font" style={{ display: 'block', opacity: 0.7 }}>free — layered look below</span>
+        </button>
+        {skins.map((s) => {
+          const isUnlocked = unlocked.includes(s.id);
+          const url = previews[s.id];
+          return (
+            <button
+              key={s.id}
+              onClick={() => (isUnlocked ? onPick(s.id) : onGoShopping())}
+              title={isUnlocked ? s.description : `${s.description} — unlock in the shop for ${s.price} 🪙`}
+              className="pixel-btn pixel-btn--ghost"
+              style={{
+                textTransform: 'none',
+                fontSize: '0.6rem',
+                textAlign: 'left',
+                display: 'flex',
+                gap: '0.4rem',
+                alignItems: 'center',
+                borderColor: active === s.id ? 'var(--d-gold, #ffd700)' : undefined,
+                opacity: isUnlocked ? 1 : 0.55,
+              }}
+            >
+              {url && <img src={url} alt="" width={24} height={24} style={{ imageRendering: 'pixelated' }} />}
+              <span>
+                {active === s.id ? '▸ ' : ''}{s.name}
+                {!isUnlocked && <span style={{ color: 'var(--d-gold, #ffd700)' }}> · {s.price} 🪙</span>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -124,6 +189,18 @@ export default function Wardrobe({ initial, onSaved }: Props) {
     return () => window.clearInterval(t);
   }, []);
 
+  // Skins are shop purchases: if the equipped character was never bought
+  // (stale tab, edited prefs), patch the look back to the default knight.
+  useEffect(() => {
+    if (!data) return;
+    void enforceSkinOwnership(data.avatar, async (a) => {
+      setAvatar(a);
+      await api.saveWardrobe(a);
+      onSaved(a);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
   const save = useCallback(async (next: AvatarPrefs) => {
     setAvatar(next);
     setSaving(true);
@@ -148,6 +225,8 @@ export default function Wardrobe({ initial, onSaved }: Props) {
   if (!data) return <p className="pixel-font" style={{ textAlign: 'center', marginTop: '2rem' }}>OPENING THE WARDROBE…</p>;
 
   const goShop = () => window.dispatchEvent(new CustomEvent('arcade:goto-shop'));
+  const activeSkin = avatar.character && avatar.character !== 'none' ? avatar.character : null;
+  const pickSkin = (id: string | null) => void save({ ...avatar, character: id ?? 'none' });
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>
@@ -196,6 +275,8 @@ export default function Wardrobe({ initial, onSaved }: Props) {
           </div>
         </div>
       </div>
+
+      <SkinChooser skins={data.skins} unlocked={data.unlockedSkins ?? []} active={activeSkin} onPick={pickSkin} onGoShopping={goShop} />
 
       {PART_ORDER.map((part) => (
         <SetChooser

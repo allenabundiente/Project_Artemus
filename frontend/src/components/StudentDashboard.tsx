@@ -463,6 +463,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           chapterId={view.chapterId}
           chapterIdx={view.chapterIdx}
           term={term}
+          avatar={user.avatar}
           onExit={() => setView({ name: 'map', bookId: view.bookId })}
           onComplete={onQuestComplete}
           onFailSettled={onQuestFailSettled}

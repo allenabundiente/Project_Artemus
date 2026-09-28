@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from '../api';
+import { loadDungeonAssets, packFrame, type LoadedDungeonAssets } from '../game/dungeonAssets';
+import { findSpawnTile, dungeonPillarAt } from '../game/dungeonLayout';
 import type { BookDetail, DungeonEvent, DungeonEventType, DungeonMap } from '../types';
 
 interface Props {
@@ -8,7 +10,8 @@ interface Props {
 }
 
 const GRID = 16;
-const CELL = 26; // px per cell in the editor preview
+/** CSS size of one preview cell. The canvas renders at 16px/tile and is scaled up, pixel-perfect. */
+const CELL = 26;
 
 type Tool = 'select' | 'monster_gate' | 'rune_socket' | 'chest_lock' | 'trap' | 'erase';
 
@@ -21,16 +24,12 @@ const TOOL_LABEL: Record<Tool, string> = {
   erase: '✕ ERASE',
 };
 
-const TYPE_MARK: Record<DungeonEventType, string> = {
-  monster_gate: '⚔',
-  rune_socket: '🔶',
-  chest_lock: '🧰',
-};
-
 /**
  * Teacher map editor for The Depths: loads every chapter's stored dungeon,
  * lets the teacher drag events and traps around a 16×16 preview, and saves
  * through the validated PUT endpoint (which re-seats invalid positions).
+ * The preview draws the real tileset atlas and asset-pack sprites — the same
+ * loader the dungeon engine uses — so what you edit is what students play.
  */
 export default function DungeonMapEditor({ bookId, onExit }: Props) {
   const [book, setBook] = useState<BookDetail | null>(null);
@@ -42,7 +41,9 @@ export default function DungeonMapEditor({ bookId, onExit }: Props) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [assets, setAssets] = useState<LoadedDungeonAssets | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const traps = useMemo(() => map?.traps ?? [], [map]);
 
@@ -56,6 +57,7 @@ export default function DungeonMapEditor({ bookId, onExit }: Props) {
         setChapterId(b.chapters[0]?.id ?? '');
       })
       .catch((e) => alive && setError((e as Error).message));
+    void loadDungeonAssets().then((a) => alive && setAssets(a));
     return () => {
       alive = false;
     };
@@ -161,7 +163,114 @@ export default function DungeonMapEditor({ bookId, onExit }: Props) {
     }
   }
 
+  /** Reroll this chapter's dungeon through the server (fresh LLM/heuristic map). */
+  async function reroll() {
+    if (!chapterId) return;
+    if (!window.confirm('Reroll this chapter? Unsaved edits and the current map are replaced by a freshly generated one.')) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.regenerateChapterDungeon(bookId, chapterId);
+      setMap(res.map);
+      setMode(res.mode);
+      setNotice('A fresh dungeon was generated for this chapter. Remember to save is not needed — it is already stored.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const chapterTitle = book?.chapters.find((c) => c.id === chapterId)?.title ?? '';
+
+  // --- pixel preview (canvas, repaints every ~120ms) -------------------------
+  const draw = useCallback(() => {
+    const cv = canvasRef.current;
+    if (!cv || !map) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    ctx.imageSmoothingEnabled = false;
+    const now = performance.now() / 1000;
+    const dims = { width: GRID, height: GRID };
+
+    for (let y = 0; y < GRID; y++) {
+      for (let x = 0; x < GRID; x++) {
+        const tile = assets?.tiles.floor ?? null;
+        if (tile) ctx.drawImage(tile, x * 16, y * 16);
+        else {
+          ctx.fillStyle = (x + y) % 2 === 0 ? '#3a3142' : '#352d3d';
+          ctx.fillRect(x * 16, y * 16, 16, 16);
+        }
+      }
+    }
+    if (assets) {
+      for (let x = 0; x < GRID; x++) {
+        ctx.drawImage(assets.tiles.wall, x * 16, 0);
+        ctx.drawImage(assets.tiles.wall, x * 16, (GRID - 1) * 16);
+      }
+      for (let y = 1; y < GRID - 1; y++) {
+        ctx.drawImage(assets.tiles.wall, 0, y * 16);
+        ctx.drawImage(assets.tiles.wall, (GRID - 1) * 16, y * 16);
+      }
+      for (let y = 2; y < GRID - 1; y++) {
+        for (let x = 2; x < GRID - 1; x++) {
+          if (dungeonPillarAt(dims, map.dungeon_events, x, y)) ctx.drawImage(assets.tiles.pillar, x * 16, y * 16);
+        }
+      }
+    }
+    for (const t of traps) {
+      const spikes = assets ? packFrame(assets, 'peaks', now) : null;
+      if (spikes) ctx.drawImage(spikes, t.x * 16, t.y * 16);
+      else {
+        ctx.fillStyle = '#e05b5b';
+        ctx.beginPath();
+        ctx.moveTo(t.x * 16 + 8, t.y * 16 + 3);
+        ctx.lineTo(t.x * 16 + 13, t.y * 16 + 13);
+        ctx.lineTo(t.x * 16 + 3, t.y * 16 + 13);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    // Exit portal.
+    if (assets) ctx.drawImage(assets.tiles.exit, (GRID - 2) * 16, (GRID - 2) * 16);
+    else {
+      ctx.fillStyle = '#9dd1ff';
+      ctx.fillRect((GRID - 2) * 16 + 3, (GRID - 2) * 16 + 3, 10, 10);
+    }
+    // Events.
+    map.dungeon_events.forEach((d, ei) => {
+      const px = d.grid_position.x * 16;
+      const py = d.grid_position.y * 16;
+      const bob = Math.round(Math.sin(now * 2.2 + ei * 1.3) * 1.5);
+      if (assets) {
+        let img: HTMLImageElement | null = null;
+        if (d.type === 'monster_gate') {
+          const s = (d.data.enemy_sprite ?? '').toLowerCase();
+          img = packFrame(assets, s.includes('skull') ? 'skull' : s.includes('vampire') || s.includes('bat') || s.includes('ghost') ? 'vampire' : s.includes('priest') || s.includes('wizard') || s.includes('mage') ? 'priest' : 'skeleton', now, ei);
+        } else if (d.type === 'chest_lock') img = packFrame(assets, 'chest', now, ei);
+        else img = packFrame(assets, 'key', now, ei);
+        if (img) {
+          ctx.drawImage(img, px, py - bob);
+          return;
+        }
+      }
+      const marks: Record<DungeonEventType, string> = { monster_gate: '⚔', rune_socket: '🔶', chest_lock: '🧰' };
+      ctx.fillStyle = '#111';
+      ctx.fillRect(px + 1, py + 1, 14, 14);
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(marks[d.type], px + 8, py + 9);
+    });
+  }, [assets, map, traps]);
+
+  useEffect(() => {
+    if (!map) return;
+    draw();
+    const t = window.setInterval(draw, 120);
+    return () => window.clearInterval(t);
+  }, [draw, map]);
 
   if (!book) {
     return (
@@ -191,6 +300,14 @@ export default function DungeonMapEditor({ bookId, onExit }: Props) {
         <button className="pixel-btn" onClick={() => void save()} disabled={!map || busy}>
           {busy ? 'SAVING…' : '💾 SAVE MAP'}
         </button>
+        <button
+          className="pixel-btn pixel-btn--ghost"
+          onClick={() => void reroll()}
+          disabled={!chapterId || busy}
+          title="Discard this chapter's current dungeon and generate a fresh one from the chapter's challenges"
+        >
+          {busy ? '…' : '🎲 REROLL'}
+        </button>
       </div>
 
       <p className="pixel-font" style={{ fontSize: '0.7rem', margin: '0 0 0.4rem' }}>
@@ -217,53 +334,58 @@ export default function DungeonMapEditor({ bookId, onExit }: Props) {
               </button>
             ))}
             <p className="term-font" style={{ fontSize: '0.75rem', maxWidth: 130, opacity: 0.8 }}>
-              MOVE drags markers. Place GATE/RUNE/CHEST on empty floor (new events need their question filled in the JSON). TRAP tiles hurt unless the hero is surging.
+              MOVE drags markers. Place GATE/RUNE/CHEST on empty floor (new events need their question filled in the JSON). TRAP tiles hurt unless the hero is surging. REROLL generates a brand-new map.
             </p>
           </div>
 
-          {/* Grid preview */}
+          {/* Grid preview: interaction overlay + scaled canvas underneath */}
           <div
             ref={gridRef}
             onPointerMove={onPointerMove}
             onPointerUp={endDrag}
             onPointerLeave={endDrag}
             style={{
-              display: 'grid',
-              gridTemplateColumns: `repeat(${GRID}, ${CELL}px)`,
+              position: 'relative',
+              width: GRID * CELL,
+              height: GRID * CELL,
               touchAction: 'none',
               userSelect: 'none',
               border: '2px solid var(--d-black)',
               background: '#241c2b',
+              cursor: tool === 'select' ? 'grab' : 'pointer',
             }}
           >
+            <canvas
+              ref={canvasRef}
+              width={GRID * 16}
+              height={GRID * 16}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                imageRendering: 'pixelated',
+              }}
+            />
+            {/* Invisible per-cell hit targets (also shows native tooltips). */}
             {Array.from({ length: GRID * GRID }, (_, i) => {
               const x = i % GRID;
               const y = Math.floor(i / GRID);
-              const border = x === 0 || y === 0 || x === GRID - 1 || y === GRID - 1;
               const ev = map.dungeon_events.find((d) => d.grid_position.x === x && d.grid_position.y === y);
               const trap = traps.some((t) => t.x === x && t.y === y);
-              const portal = x === GRID - 2 && y === GRID - 2;
-              const spawn = x <= 2 && y <= 2;
               return (
                 <div
                   key={i}
                   onPointerDown={(e) => { e.preventDefault(); onPointerDown(e, { x, y }); }}
                   title={`${x},${y}${ev ? ` — ${ev.type}` : ''}${trap ? ' — trap' : ''}`}
                   style={{
+                    position: 'absolute',
+                    left: x * CELL,
+                    top: y * CELL,
                     width: CELL,
                     height: CELL,
-                    fontSize: '0.7rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: border ? '#191219' : (x + y) % 2 === 0 ? '#3a3142' : '#352d3d',
-                    cursor: tool === 'select' && ev ? 'grab' : 'pointer',
-                    outline: portal ? '2px solid var(--d-gold)' : undefined,
-                    opacity: spawn && !ev && !trap ? 0.55 : 1,
                   }}
-                >
-                  {ev ? TYPE_MARK[ev.type] : trap ? '▲' : portal ? '🌀' : spawn ? '🚩' : ''}
-                </div>
+                />
               );
             })}
           </div>

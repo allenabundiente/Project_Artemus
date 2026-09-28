@@ -2,6 +2,8 @@ import type { Challenge } from '../types';
 import { sfx } from './sfx';
 import { resolveTheme, type Theme } from './themes';
 import { composeAvatar, type AvatarConfig, type AvatarFrame } from './avatar';
+import { activeCharacter, composePackCharacterFrame } from './packAvatar';
+import type { LoadedDungeonAssets } from './dungeonAssets';
 import type { SpriteAnimation } from './animations';
 import type { QuestPlan } from './questPlan';
 
@@ -80,6 +82,8 @@ export class ArcadeEngine {
   private monsterAnims: (string | null)[] = [];
   /** Player customization (wardrobe); undefined = classic hero sprite. */
   private avatar?: AvatarConfig;
+  /** Loaded asset pack — enables the buyable pack-character skins. */
+  private pack: LoadedDungeonAssets | null = null;
   private monsterSprites: string[];
   private cb: EngineCallbacks;
 
@@ -164,6 +168,11 @@ export class ArcadeEngine {
     });
     this.py = layout.groundY - PLAYER_H;
     this.bugDirs = layout.monsters.map(() => (Math.random() < 0.5 ? 1 : -1) as 1 | -1);
+  }
+
+  /** Attach the loaded asset pack once it resolves (enables pack skins). */
+  usePack(pack: LoadedDungeonAssets | null): void {
+    this.pack = pack;
   }
 
   start(): void {
@@ -749,7 +758,11 @@ export class ArcadeEngine {
     if (this.invuln <= 0 || this.showPoseOverride || Math.floor(this.time * 12) % 2 === 0) {
       const animFrame: AvatarFrame = showPose ?? (!this.onGround ? 'jump' : !this.input.left && !this.input.right ? 'idle' : (['run1', 'run2', 'run3', 'run4'] as const)[Math.floor(this.animT * 10) % 4]);
       if (this.avatar) {
-        const composed = composeAvatar(animFrame, this.avatar, this.sprites);
+        // Pack-character skin (if owned) rides through both game modes.
+        const pack = this.pack;
+        const skin = activeCharacter(this.avatar);
+        const packFrame = pack && skin ? composePackCharacterFrame(animFrame, skin, pack, this.input.left && !this.input.right) : null;
+        const composed = packFrame ?? composeAvatar(animFrame, this.avatar, this.sprites);
         const sx = Math.round(this.px - this.camX);
         const sy = Math.round(this.py);
         if (flashing) {

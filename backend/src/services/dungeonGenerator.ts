@@ -60,6 +60,12 @@ export interface DungeonGenerationOptions {
   category: 'general' | 'programming' | 'language';
   /** Existing challenges for the chapter — reused by the heuristic builder. */
   challenges?: { type: string; prompt: string; options: string[] | null; correctAnswer: string; difficulty: string }[];
+  /**
+   * Variation salt: two calls with different salts yield different heuristic
+   * layouts (event row order + trap scatter). Salts are hashed into the trap
+   * seed and the event slot offset. Omit for the default layout.
+   */
+  variationSalt?: number;
 }
 
 const SYSTEM_PROMPT = `You are an expert retro game level designer and instructional design AI. Your task is to process an educational text payload and convert it into a structured Top-Down Dungeon Quest JSON format.
@@ -272,6 +278,12 @@ export function generateHeuristicMap(chapter: ChapterRow, opts: DungeonGeneratio
   const coding = opts.category === 'programming';
   const events: DungeonEvent[] = [];
   let slot = 0;
+  if (opts.variationSalt) {
+    // Reroll: rotate the starting slot so event order along the snake path
+    // (and thus every position) differs from the previous roll.
+    const slots = MAP_W * MAP_H;
+    slot = opts.variationSalt % slots;
+  }
   const place = (): { x: number; y: number } => {
     // Snake path placement: walk the grid in reading order — feels like a
     // route. Skip the top-left spawn corner so the hero never spawns on a
@@ -345,7 +357,11 @@ export function generateHeuristicMap(chapter: ChapterRow, opts: DungeonGeneratio
     const cut = sentence.indexOf(' ', mid);
     lines.push([sentence.slice(0, cut > 0 ? cut : mid).trim(), sentence.slice(cut > 0 ? cut : mid).trim()]);
   }
-  for (const parts of lines.slice(0, Math.max(0, MAX_EVENTS - events.length))) {
+  // Reserve one slot for the guaranteed monster gate below when none of the
+  // challenges produced one — otherwise chests/runes can fill every slot and
+  // the guarantee would never fire.
+  const gateReserved = events.some((e) => e.type === 'monster_gate') ? 0 : 1;
+  for (const parts of lines.slice(0, Math.max(0, MAX_EVENTS - events.length - gateReserved))) {
     if (parts.length < 2) continue;
     const seq = parts.map((p) => p.trim()).filter(Boolean);
     if (seq.length < 2) continue;
@@ -392,7 +408,7 @@ export function generateHeuristicMap(chapter: ChapterRow, opts: DungeonGeneratio
     });
   }
 
-  const traps = placeTraps(events, chapter.id);
+  const traps = placeTraps(events, chapter.id, opts.variationSalt);
   return {
     quest_meta: {
       title: `The Depths of ${chapter.title}`,
@@ -410,8 +426,8 @@ export function generateHeuristicMap(chapter: ChapterRow, opts: DungeonGeneratio
  * gate with one trap (the shielded-sprint shortcut), then fill a few corridor
  * tiles. Never touches the spawn corner (x<=3 && y<=3) or the portal corner.
  */
-function placeTraps(events: DungeonEvent[], seedText: string): { x: number; y: number }[] {
-  let seed = 0x51ed;
+function placeTraps(events: DungeonEvent[], seedText: string, salt = 0): { x: number; y: number }[] {
+  let seed = 0x51ed + (Math.imul(0x9e37, salt) | 0);
   for (const ch of seedText) seed = (Math.imul(31, seed) + ch.charCodeAt(0)) | 0;
   const rand = (): number => {
     seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;

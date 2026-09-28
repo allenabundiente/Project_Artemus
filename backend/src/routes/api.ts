@@ -816,6 +816,8 @@ export function createApiRouter(): Router {
     const challenges = await getChallengesForChapter(chapterId);
     const result = await generateDungeonMap(chapter, {
       category: book!.quizMode,
+      // Each reroll is a new roll: salt the heuristic so layouts genuinely vary.
+      variationSalt: (Date.now() % 100000) + Math.floor(Math.random() * 9973),
       challenges: challenges.map((c) => ({
         type: c.type, prompt: c.prompt, options: c.options, correctAnswer: c.correctAnswer, difficulty: c.difficulty,
       })),
@@ -842,6 +844,7 @@ export function createApiRouter(): Router {
       const challenges = await getChallengesForChapter(chapter.id);
       const result = await generateDungeonMap(chapter, {
         category: book!.quizMode,
+        variationSalt: (Date.now() % 100000) + Math.floor(Math.random() * 9973),
         challenges: challenges.map((c) => ({
           type: c.type, prompt: c.prompt, options: c.options, correctAnswer: c.correctAnswer, difficulty: c.difficulty,
         })),

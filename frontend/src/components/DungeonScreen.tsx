@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DungeonEvent, DungeonFetchResult, ScoreResultResponse, Term } from '../types';
+import type { AvatarPrefs, DungeonEvent, DungeonFetchResult, ScoreResultResponse, Term } from '../types';
 import * as api from '../api';
 import { DungeonEngine } from '../game/dungeonEngine';
 import { sfx } from '../game/sfx';
@@ -14,6 +14,7 @@ interface Props {
   chapterId: string;
   chapterIdx: number;
   term: Term;
+  avatar?: AvatarPrefs;
   onExit: () => void;
   onComplete: (chapterId: string, result: ScoreResultResponse) => void;
   onFailSettled?: (chapterId: string, result: ScoreResultResponse) => void;
@@ -27,7 +28,7 @@ type Phase = 'loading' | 'playing' | 'event' | 'gameover';
  * right dialog per event type. Monster gates reuse the classic BattleScreen
  * (hearts + queue-of-one) so the look stays consistent.
  */
-export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, onExit, onComplete, onFailSettled }: Props) {
+export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, avatar, onExit, onComplete, onFailSettled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<DungeonEngine | null>(null);
   const startedAtRef = useRef<number>(Date.now());
@@ -133,6 +134,7 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, onE
         engineRef.current = engine;
         // Real pixel-art pack (silent authored-grid fallback when missing).
         await engine.useAssets();
+        engine.setAvatar(avatar);
         engine.start();
         setPhase('playing');
       } catch (e) {

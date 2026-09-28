@@ -1,9 +1,11 @@
 // Shared live avatar sprite used everywhere a profile renders: dashboards,
-// leaderboard rows, guild roster. Loads sprites once and animates the idle
-// cycle; falls back to a silhouette-sized placeholder while loading.
+// leaderboard rows, guild roster. Renders the equipped pack character when one
+// is owned (the buyable asset-pack heroes), otherwise the layered wardrobe
+// composite. Falls back to a silhouette-sized placeholder while loading.
 import { useEffect, useState } from 'react';
 import type { AvatarPrefs } from '../types';
 import { composeAvatar, type AvatarFrame } from '../game/avatar';
+import { activeCharacter, composePackCharacterFrame, packAssetsOnce } from '../game/packAvatar';
 import { loadSprites, type SpriteMap } from '../game/sprites';
 
 export const DEFAULT_AVATAR: AvatarPrefs = {
@@ -34,6 +36,7 @@ function spritesOnce(): Promise<SpriteMap> {
 
 export default function AvatarSprite({ avatar, size = 24, animate = true, title }: Props) {
   const [sprites, setSprites] = useState<SpriteMap | null>(spriteMapCache);
+  const [packCanvas, setPackCanvas] = useState<HTMLCanvasElement | null>(null);
   const [frame, setFrame] = useState<AvatarFrame>('idle');
 
   useEffect(() => {
@@ -51,11 +54,24 @@ export default function AvatarSprite({ avatar, size = 24, animate = true, title 
     return () => window.clearInterval(t);
   }, [animate]);
 
-  if (!sprites) return <span style={{ display: 'inline-block', width: size, height: size }} aria-hidden />;
-  const cv = composeAvatar(frame, avatar ?? DEFAULT_AVATAR, sprites);
+  // Equipped pack character (async pack load + per-frame canvas).
+  const skin = activeCharacter(avatar);
+  useEffect(() => {
+    let cancelled = false;
+    setPackCanvas(null);
+    if (!skin) return;
+    void packAssetsOnce().then((pack) => {
+      if (cancelled || !pack) return;
+      setPackCanvas(composePackCharacterFrame(animate ? frame : 'idle', skin, pack));
+    });
+    return () => { cancelled = true; };
+  }, [skin, frame, animate]);
+
+  if (!sprites && !packCanvas) return <span style={{ display: 'inline-block', width: size, height: size }} aria-hidden />;
+  const src = packCanvas ?? composeAvatar(frame, avatar ?? DEFAULT_AVATAR, sprites!);
   return (
     <img
-      src={cv.toDataURL()}
+      src={src.toDataURL()}
       alt={title ?? 'Adventurer avatar'}
       title={title}
       width={size}

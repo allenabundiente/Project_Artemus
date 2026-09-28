@@ -24,8 +24,10 @@
 
 import { sfx } from './sfx';
 import { tileCanvas } from './dungeonTileset';
-import { loadDungeonAssets, type LoadedDungeonAssets } from './dungeonAssets';
-import type { DungeonEvent, DungeonMap } from '../types';
+import { loadDungeonAssets, packFrame, type LoadedDungeonAssets } from './dungeonAssets';
+import { dungeonPillarAt, blockedTiles as sharedBlockedTiles, findSpawnTile as sharedSpawnTile } from './dungeonLayout';
+import { activeCharacter, composePackCharacterFrame, tintPackCharacter } from './packAvatar';
+import type { AvatarPrefs, DungeonEvent, DungeonMap } from '../types';
 
 export const DUNGEON_GRID = 16;
 /** Render scale: 16×16 tiles on the canvas → CSS-scaled with pixelated rendering. */
@@ -93,6 +95,8 @@ export class DungeonEngine {
   private mirrorCanvases = new WeakMap<HTMLCanvasElement, HTMLCanvasElement>();
   /** Real asset pack (tileset atlas + per-frame sprites); null → authored-grid fallback. */
   private assets: LoadedDungeonAssets | null = null;
+  /** Wardrobe prefs — `character` picks the equipped pack skin, if any. */
+  private avatar?: AvatarPrefs;
 
   // player position in pixels (center-based)
   private px = 0;
@@ -154,27 +158,16 @@ export class DungeonEngine {
     // Border walls.
     for (let x = 0; x < this.cols; x++) { set(x, 0, 'wall'); set(x, this.rows - 1, 'wall'); }
     for (let y = 0; y < this.rows; y++) { set(0, y, 'wall'); set(this.cols - 1, y, 'wall'); }
-    // Deterministic pillar scatter (seeded by event ids so revisits match).
-    let seed = 0x9e37;
-    for (const e of this.map.dungeon_events) {
-      for (const ch of e.event_id) seed = (Math.imul(31, seed) + ch.charCodeAt(0)) | 0;
-    }
-    const rand = () => {
-      seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
-      return ((seed >>> 0) % 1000) / 1000;
-    };
-    const blocked = new Set<string>();
-    // Keep spawn area and event tiles clear.
-    for (let dx = 0; dx < 3; dx++) for (let dy = 0; dy < 3; dy++) blocked.add(`${1 + dx},${1 + dy}`);
-    for (const e of this.map.dungeon_events) blocked.add(`${e.grid_position.x},${e.grid_position.y}`);
     // Exit portal sits bottom-right.
     const portalX = this.cols - 2;
     const portalY = this.rows - 2;
-    blocked.add(`${portalX},${portalY}`);
+    const blocked = sharedBlockedTiles(this.map.map_dimensions, this.map.dungeon_events);
+    // Deterministic pillar scatter (seeded by event ids so revisits match) —
+    // the shared rules the map editor previews (dungeonLayout.ts).
     for (let y = 2; y < this.rows - 1; y++) {
       for (let x = 2; x < this.cols - 1; x++) {
         if (blocked.has(`${x},${y}`)) continue;
-        if (rand() < 0.10) set(x, y, 'pillar');
+        if (dungeonPillarAt(this.map.map_dimensions, this.map.dungeon_events, x, y)) set(x, y, 'pillar');
       }
     }
     // Seal the corners around the portal so it reads as a chamber.
@@ -206,7 +199,7 @@ export class DungeonEngine {
     }
     for (const c of trapCandidates) {
       if (this.traps.size >= 10) break;
-      if (rand() < 0.05) {
+      if (Math.random() < 0.05) {
         this.traps.add(c.y * this.cols + c.x);
         blocked.add(`${c.x},${c.y}`);
       }
@@ -232,27 +225,12 @@ export class DungeonEngine {
       t: Math.random() * Math.PI * 2,
     }));
 
-    // Spawn far from any event — landing on a marker at (1,1) the instant the
-    // floor loads would open a dialog before the player has moved once.
-    const spawn = this.findSpawnTile();
+    // Spawn far from any event — landing on a marker the instant the floor
+    // loads would open a dialog before the player has moved once (shared rule
+    // with the editor preview, dungeonLayout.ts).
+    const spawn = sharedSpawnTile(this.map.map_dimensions, this.map.dungeon_events);
     this.px = spawn.x * DUNGEON_TILE + DUNGEON_TILE / 2;
     this.py = spawn.y * DUNGEON_TILE + DUNGEON_TILE / 2;
-  }
-
-  /** First floor tile (spiral out from the classic top-left) that keeps 1.5 tiles of clearance from every event. */
-  private findSpawnTile(): { x: number; y: number } {
-    const clear = (tx: number, ty: number): boolean =>
-      this.tiles[ty * this.cols + tx] === 'floor' &&
-      this.events.every((e) => Math.hypot(e.tx - tx, e.ty - ty) >= 1.5);
-    if (clear(1, 1)) return { x: 1, y: 1 };
-    for (let r = 1; r < Math.max(this.cols, this.rows); r++) {
-      for (let y = Math.max(1, 1 - r); y <= Math.min(this.rows - 2, 1 + r); y++) {
-        for (let x = Math.max(1, 1 - r); x <= Math.min(this.cols - 2, 1 + r); x++) {
-          if (clear(x, y)) return { x, y };
-        }
-      }
-    }
-    return { x: 1, y: 1 }; // degenerate map fallback
   }
 
   private tileAt(tx: number, ty: number): TileKind {
@@ -308,6 +286,11 @@ export class DungeonEngine {
    */
   async useAssets(): Promise<void> {
     this.assets = await loadDungeonAssets();
+  }
+
+  /** Equip the wardrobe look; the `character` field picks a pack skin. */
+  setAvatar(avatar?: AvatarPrefs): void {
+    this.avatar = avatar;
   }
 
   /** Player takes one damage (wrong answer at a gate / trap without shield). */
@@ -588,10 +571,7 @@ export class DungeonEngine {
     ctx.fillRect(0, 0, W, H);
 
     const A = this.assets;
-    const frame = (set: string, offset = 0): HTMLImageElement | null => {
-      const arr = A?.frames.get(set);
-      return arr && arr.length > 0 ? arr[(Math.floor(this.time * 6) + offset) % arr.length] : null;
-    };
+    const frame = (set: string, offset = 0): HTMLImageElement | null => packFrame(A, set, this.time, offset);
 
     // --- layer 0: floors (and full-tile walls) -------------------------------
     for (let y = 0; y < this.rows; y++) {
@@ -701,8 +681,12 @@ export class DungeonEngine {
     ctx.fillRect(Math.round(this.px) - 5, Math.round(this.py) + 5, 10, 2);
     let drewHero = false;
     if (A) {
-      const cell = A.heroPoses[pose === 'b' ? 1 : 0];
-      ctx.drawImage(this.facing === 'left' ? this.flippedCanvas(cell) : cell, pxx, pyy);
+      // Equipped pack character when one is owned; otherwise the free knight.
+      const skin = activeCharacter(this.avatar);
+      const skinCell = skin ? composePackCharacterFrame(pose === 'b' ? 'run2' : 'idle', skin, A, this.facing === 'left') : null;
+      const cell: HTMLCanvasElement = skinCell ?? A.heroPoses[pose === 'b' ? 1 : 0];
+      if (this.hurtT > 0) ctx.drawImage(tintPackCharacter(cell, '#ff6b6b'), pxx, pyy);
+      else ctx.drawImage(cell, pxx, pyy);
       drewHero = true;
     }
     if (!drewHero) {

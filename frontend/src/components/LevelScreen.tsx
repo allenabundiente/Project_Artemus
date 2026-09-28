@@ -3,6 +3,7 @@ import type { AvatarPrefs, ScoreResultResponse, Term } from '../types';
 import * as api from '../api';
 import { ArcadeEngine, buildLayout, BACKING_W, BACKING_H } from '../game/engine';
 import { loadSprites, spriteDataUrl } from '../game/sprites';
+import { packAssetsOnce } from '../game/packAvatar';
 import { getAnimations, loadExtraSprites } from '../game/animations';
 import { dealQuestPlan, type QuestPlan } from '../game/questPlan';
 import { sfx } from '../game/sfx';
@@ -98,6 +99,10 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         const plan = dealQuestPlan(challenges, termInfo.settings.monsterDifficulty, seed);
         planRef.current = plan;
         const sprites = await loadSprites();
+        // Asset pack for the buyable pack-character skins (best-effort).
+        void packAssetsOnce().then((p) => {
+          if (!cancelled && engineRef.current && p) engineRef.current.usePack(p);
+        });
         if (cancelled) return;
         // Admin-uploaded custom frames + animation clips (best-effort).
         const animations = await getAnimations();

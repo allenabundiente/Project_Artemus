@@ -22,14 +22,10 @@ import {
   getChapters, getChapter, getChallengesForChapter, getChapterWithText,
   countChallenges, deleteChallengesForBook, deleteChallengesForChapter, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
-<<<<<<< HEAD
-  insertGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
+  insertGuild, attachOrphanBooksToGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
   getGuildMessages, getGuildMessagesSince, insertGuildMessage, deleteGuildMessage,
   getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
   getStreak, updateStreak, STREAK_BONUS_COINS, getStreakCalendar, getGuildStreaks, isStreakAtRisk, effectiveStreak,
-=======
-  insertGuild, attachOrphanBooksToGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
->>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
   getChallenge, replaceChallenge, nextChallengeOrd,
@@ -722,12 +718,8 @@ export function createApiRouter(): Router {
       // Filename detection (${topic}_code.pdf → programming) with explicit
       // teacher override taking precedence.
       const quizMode = detectQuizMode(req.file.originalname, req.body?.quizMode);
-<<<<<<< HEAD
       const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount, quizMode, questChapters);
-=======
-      const bookId = await insertBook(parsed.title, req.file.originalname, user.id, guildId, questCount, quizMode);
       if (req.body?.mapMode === 'topdown') await setMapMode(bookId, 'topdown');
->>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
       for (let i = 0; i < parsed.chapters.length; i++) {
         const ch = parsed.chapters[i];
         await insertChapter(bookId, i, ch.title, ch.text, ch.codeBlocks);
@@ -1168,11 +1160,7 @@ export function createApiRouter(): Router {
     const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
     if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
 
-<<<<<<< HEAD
-    if (req.body?.questCount !== undefined || req.body?.questChapters !== undefined || req.body?.quizMode !== undefined) {
-=======
-    if (req.body?.questCount !== undefined || req.body?.quizMode !== undefined || req.body?.mapMode !== undefined) {
->>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
+    if (req.body?.questCount !== undefined || req.body?.questChapters !== undefined || req.body?.quizMode !== undefined || req.body?.mapMode !== undefined) {
       let updated = book;
       if (req.body?.questCount !== undefined) {
         updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount)) ?? book;
@@ -1197,15 +1185,9 @@ export function createApiRouter(): Router {
         updated = (await getBook(bookId)) ?? book;
       }
       if (!updated) return res.status(500).json({ error: 'Could not save quest settings' });
-<<<<<<< HEAD
-      return res.json({ bookId, questCount: updated.questCount, questChapters: updated.questChapters, quizMode: updated.quizMode });
+      return res.json({ bookId, questCount: updated.questCount, questChapters: updated.questChapters, quizMode: updated.quizMode, mapMode: updated.mapMode });
     }
-    res.json({ bookId, questCount: book.questCount, questChapters: book.questChapters, quizMode: book.quizMode });
-=======
-      return res.json({ bookId, questCount: updated.questCount, quizMode: updated.quizMode, mapMode: updated.mapMode });
-    }
-    res.json({ bookId, questCount: book.questCount, quizMode: book.quizMode, mapMode: book.mapMode });
->>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
+    res.json({ bookId, questCount: book.questCount, questChapters: book.questChapters, quizMode: book.quizMode, mapMode: book.mapMode });
   });
 
   // --- teacher: review / regenerate individual challenges ------------------------

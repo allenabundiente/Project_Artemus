@@ -1,15 +1,8 @@
 import type {
-<<<<<<< HEAD
-  AdminAccount, AuditEntry, AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, FeatureRow,
-  GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
+  AdminAccount, AuditEntry, AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, DungeonFetchResult, DungeonMap,
+  FeatureRow, GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
   Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
-=======
-  AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, DungeonFetchResult, DungeonMap,
-  FeatureRow, GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus,
-  MapConfig, MapResolve, Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem,
-  TermSettings, ThemeMeta, UploadResult, WardrobeResponse,
->>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
 } from './types';
 
 const TOKEN_KEY = 'arcade-token';
@@ -269,20 +262,13 @@ export async function getTermSettings(term: string): Promise<{ term: string; set
 
 // --- books -------------------------------------------------------------------------
 
-<<<<<<< HEAD
-export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto', questChapters?: number | null): Promise<UploadResult> {
-=======
-export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto', mapMode?: 'classic' | 'topdown'): Promise<UploadResult> {
->>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
+export async function uploadPdf(file: File, questCount?: number | null, quizMode?: QuizMode | 'auto', questChapters?: number | null, mapMode?: 'classic' | 'topdown'): Promise<UploadResult> {
   const form = new FormData();
   form.append('pdf', file);
   if (questCount != null) form.append('questCount', String(questCount));
   if (quizMode && quizMode !== 'auto') form.append('quizMode', quizMode);
-<<<<<<< HEAD
   if (questChapters != null) form.append('questChapters', String(questChapters));
-=======
   if (mapMode === 'topdown') form.append('mapMode', 'topdown');
->>>>>>> 77697c2 (Add The Depths: top-down dungeon mode with LLM-generated maps, asset pack art, and a teacher map editor)
   const res = await fetch('/api/upload', { method: 'POST', body: form, headers: authHeaders() });
   return json<UploadResult>(res);
 }

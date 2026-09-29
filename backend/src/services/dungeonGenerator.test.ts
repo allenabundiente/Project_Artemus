@@ -19,6 +19,7 @@ function chapter(over: Partial<ChapterRow> = {}): ChapterRow {
     title: 'Loops in Python',
     text: '',
     codeBlocks: [],
+    compiled: null,
     ...over,
   };
 }

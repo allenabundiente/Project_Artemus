@@ -213,6 +213,32 @@ export async function getGuildStreaks(): Promise<{ guildId: string; entries: Gui
   return get('/api/guilds/mine/streaks');
 }
 
+// --- teacher tithe ledger --------------------------------------------------------------
+
+export interface TitheEntry {
+  userId: string;
+  name: string;
+  avatar?: Record<string, unknown>;
+  /** Coins the student netted from quests this term (fail returns included). */
+  earned: number;
+  /** Teacher's 10% cut collected from this student this term. */
+  tithe: number;
+  /** Completed quests that paid the tithe this term. */
+  quests: number;
+}
+
+export interface TitheLedger {
+  guildId: string;
+  term: string;
+  entries: TitheEntry[];
+  totals: { earned: number; tithe: number; quests: number };
+}
+
+/** Per-student coin earnings + 10% tithe collected this term (teacher only). */
+export async function getTitheLedger(term: string): Promise<TitheLedger> {
+  return get(`/api/guilds/mine/tithe?term=${encodeURIComponent(term)}`);
+}
+
 // --- guild member management (teacher) ----------------------------------------------
 
 /** Kick a student from your guild — their account, coins, and scores survive. */

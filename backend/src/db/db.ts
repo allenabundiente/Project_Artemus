@@ -203,6 +203,8 @@ export interface ScoreRow {
   coinsPenalty: number;
   /** What actually hit the balance: netCoins = max(0, gathered − penalty). */
   netCoins: number;
+  /** 10% cut credited to the guild teacher on completed quests (0 otherwise). */
+  teacherTithe: number;
   /** How the run ended, when it ended badly. */
   failReason: 'out_of_lives' | 'out_of_time' | null;
   createdAt: Date;
@@ -215,7 +217,7 @@ function mapScore(r: any): ScoreRow {
     finished: r.finished, livesRemaining: r.lives_remaining, term: r.term,
     coinsAwarded: r.coins_awarded, coinsGathered: r.coins_gathered ?? 0,
     coinsPenalty: r.coins_penalty ?? 0, netCoins: r.net_coins ?? r.coins_awarded ?? 0,
-    failReason: r.fail_reason ?? null, createdAt: r.created_at,
+    teacherTithe: r.teacher_tithe ?? 0, failReason: r.fail_reason ?? null, createdAt: r.created_at,
   };
 }
 
@@ -602,16 +604,59 @@ export async function insertScoreTx(ex: DbExecutor, s: {
   userId: string; chapterId: string | null; rawScore: number; mistakes: number;
   timeSeconds: number; finished: boolean; livesRemaining: number; term: string; coinsAwarded: number;
   coinsGathered?: number; coinsPenalty?: number; netCoins?: number;
-  failReason?: 'out_of_lives' | 'out_of_time' | null;
+  failReason?: 'out_of_lives' | 'out_of_time' | null; teacherTithe?: number;
 }): Promise<ScoreRow> {
   const row = await ex.query<Record<string, unknown>>(
-    `INSERT INTO scores (user_id, chapter_id, raw_score, mistakes, time_seconds, finished, lives_remaining, term, coins_awarded, coins_gathered, coins_penalty, net_coins, fail_reason)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+    `INSERT INTO scores (user_id, chapter_id, raw_score, mistakes, time_seconds, finished, lives_remaining, term, coins_awarded, coins_gathered, coins_penalty, net_coins, teacher_tithe, fail_reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
     [s.userId, s.chapterId, s.rawScore, s.mistakes, s.timeSeconds,
      s.finished, s.livesRemaining, s.term, s.coinsAwarded,
-     s.coinsGathered ?? 0, s.coinsPenalty ?? 0, s.netCoins ?? s.coinsAwarded, s.failReason ?? null]
+     s.coinsGathered ?? 0, s.coinsPenalty ?? 0, s.netCoins ?? s.coinsAwarded, s.teacherTithe ?? 0, s.failReason ?? null]
   );
   return mapScore(row.rows[0]);
+}
+
+export interface TitheEntry {
+  userId: string;
+  name: string;
+  /** Equipped avatar for the roster look. */
+  avatar?: Record<string, unknown>;
+  /** Coins the student netted from quests this term (fail returns included). */
+  earned: number;
+  /** Teacher's 10% cut collected from this student this term. */
+  tithe: number;
+  /** Completed quests that paid the tithe this term. */
+  quests: number;
+}
+
+/**
+ * The teacher's tithe ledger for one term: every guild member (zero rows
+ * included, so quiet students still appear), with the coins they netted, the
+ * tithe collected from them, and how many completed quests paid. Sums are
+ * over scores rows — the same rows the settlement transaction wrote — so the
+ * ledger always matches what was actually credited.
+ */
+export async function getGuildTitheLedger(guildId: string, term: string): Promise<TitheEntry[]> {
+  const rows = await query<Record<string, unknown>>(
+    `SELECT u.id, u.name, u.preferences AS avatar,
+            COALESCE(SUM(s.net_coins), 0)::int AS earned,
+            COALESCE(SUM(s.teacher_tithe), 0)::int AS tithe,
+            COUNT(s.id) FILTER (WHERE s.teacher_tithe > 0)::int AS quests
+     FROM users u
+     LEFT JOIN scores s ON s.user_id = u.id AND s.term = $2
+     WHERE u.guild_id = $1
+     GROUP BY u.id, u.name, u.preferences
+     ORDER BY tithe DESC, earned DESC, u.name ASC`,
+    [guildId, term],
+  );
+  return rows.map((r) => ({
+    userId: String(r.id),
+    name: String(r.name),
+    avatar: (r.avatar ?? null) as Record<string, unknown> | null ?? undefined,
+    earned: Number(r.earned ?? 0),
+    tithe: Number(r.tithe ?? 0),
+    quests: Number(r.quests ?? 0),
+  }));
 }
 
 export interface LeaderboardEntry {

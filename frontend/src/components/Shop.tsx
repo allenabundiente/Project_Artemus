@@ -215,6 +215,11 @@ export default function Shop({ user, onUserUpdated }: Props) {
 
       <div className="pixel-panel" style={{ textAlign: 'center' }}>
         <p className="pixel-font" style={{ fontSize: '0.7rem', margin: '0 0 0.5rem' }}>YOUR HERO</p>
+        {user.role === 'teacher' && (
+          <p className="term-font" style={{ fontSize: '0.65rem', color: 'var(--d-gold)', margin: 0 }}>
+            You collect 10% of every coin your students earn in quests — spend it well.
+          </p>
+        )}
         <AvatarPreview avatar={user.avatar ?? { sex: 'male', hair: 'short', armor: 'tunic', helmet: 'none', color: '#e8b43c' }} />
         <p className="term-font" style={{ fontSize: '0.9rem', color: 'var(--d-stone-light)', margin: '0.5rem 0 0' }}>
           Purchases unlock wardrobe sets forever — coins never expire.

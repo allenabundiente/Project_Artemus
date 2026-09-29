@@ -26,6 +26,7 @@ import {
   getGuildMessages, getGuildMessagesSince, insertGuildMessage, deleteGuildMessage,
   getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
   getStreak, updateStreak, STREAK_BONUS_COINS, getStreakCalendar, getGuildStreaks, isStreakAtRisk, effectiveStreak,
+  getGuildTitheLedger,
   updateGuildTermSettings, joinGuild, leaveGuild, listGuildMembers,
   insertScore, getLeaderboard, getTermScore, rankForScore, DEFAULT_RANK_TIERS,
   getChallenge, replaceChallenge, nextChallengeOrd,
@@ -42,6 +43,14 @@ import {
  */
 const FAIL_PENALTY_MIN_PCT = 0.05; // lose at least 5% of gathered coins
 const FAIL_PENALTY_MAX_PCT = 0.20; // ... and at most 20%
+
+/**
+ * Teacher tithe: the guild's teacher earns 10% of every coin a student earns
+ * during quests. A student's FAIL-penalty return is NOT taxed — the teacher
+ * takes a cut of earnings, never of losses (and never of the streak bonus,
+ * which is not earned during the quest itself). No teacher → no tithe.
+ */
+const TEACHER_TITHE_PCT = 0.10;
 
 /**
  * Generate challenges for every chapter of a book, honoring the guild's term
@@ -644,6 +653,34 @@ export function createApiRouter(): Router {
     if (!guild) return res.status(404).json({ error: 'You are not in a guild' });
     const entries = await getGuildStreaks(guild.id);
     res.json({ guildId: guild.id, entries: entries.map((e) => ({ ...e, avatar: sanitizeAvatar(e.avatar) })) });
+  });
+
+  /**
+   * Teacher's tithe ledger: every guild member's coin earnings this term and
+   * the 10% cut collected from their completed quests, plus totals. Teachers
+   * and admins only — students have no business seeing the ledger.
+   */
+  router.get('/guilds/mine/tithe', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    if (user.role !== 'teacher' && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only the guild teacher can view the tithe ledger' });
+    }
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    const termParam = typeof req.query.term === 'string' ? req.query.term : 'prelims';
+    const term = TERMS.includes(termParam as any) ? termParam : 'prelims';
+    const entries = await getGuildTitheLedger(guild.id, term);
+    res.json({
+      guildId: guild.id,
+      term,
+      entries: entries.map((e) => ({ ...e, avatar: e.avatar ? sanitizeAvatar(e.avatar) : undefined })),
+      totals: {
+        earned: entries.reduce((a, e) => a + e.earned, 0),
+        tithe: entries.reduce((a, e) => a + e.tithe, 0),
+        quests: entries.reduce((a, e) => a + e.quests, 0),
+      },
+    });
   });
 
   // --- guild settings (teacher-only) ---------------------------------------------
@@ -1356,6 +1393,9 @@ export function createApiRouter(): Router {
     const guild = await resolveUserGuild(user);
     const ts = resolveTermSettings(opts.term, guild?.termSettings ?? null);
     const weights: ScoreWeights = ts.scoreWeights ?? DEFAULT_SCORE_WEIGHTS;
+    // The tithe's recipient: the teacher who leads the student's guild. Resolved
+    // once here so the transaction below stays a straight-line read-modify-write.
+    const teacherId = guild?.teacherId ?? null;
 
     // The existing scoring formula, unchanged — the fail path feeds it a
     // not-finished (and out-of-life) run so its own penalties apply.
@@ -1385,14 +1425,26 @@ export function createApiRouter(): Router {
     // same transaction as the quest's own coins so the balance stays exact.
     let streak = 0;
     let streakBonus = 0;
+    // Teacher tithe: 10% of what the student EARNS on a completed quest —
+    // computed up front so the score row and the teacher's credit are written
+    // from the same number inside ONE transaction below. Fail paths (which
+    // RETURN coins to the student) and streak bonuses (not quest earnings)
+    // pay nothing.
+    let teacherTithe = 0;
+    if (teacherId && opts.failReason === null && netCoins > 0) {
+      teacherTithe = Math.max(1, Math.floor(netCoins * TEACHER_TITHE_PCT));
+    }
     const { scoreRow, newCoins } = await withTransaction(async (tx) => {
       const scoreRow = await insertScoreTx(tx, {
         userId: user.id, chapterId: chapter.id, rawScore: scaled, mistakes: opts.mistakes,
         timeSeconds: opts.timeSeconds, finished: opts.finished, livesRemaining: opts.livesRemaining,
         term: opts.term, coinsAwarded, coinsGathered: opts.coinsGathered, coinsPenalty, netCoins,
-        failReason: opts.failReason,
+        failReason: opts.failReason, teacherTithe,
       });
       let coins = await applyCoinsTx(tx, user.id, netCoins);
+      if (teacherId && teacherTithe > 0) {
+        await applyCoinsTx(tx, teacherId, teacherTithe);
+      }
       if (opts.failReason === null) {
         const s = await updateStreak(user.id, tx);
         streak = s.streak;
@@ -1421,6 +1473,7 @@ export function createApiRouter(): Router {
       userId: user.id, chapterId: chapter.id, term: opts.term,
       outcome: opts.failReason ?? 'completed', score: scaled,
       coinsGathered: opts.coinsGathered, coinsPenalty, netCoins, balance: newCoins,
+      teacherId, teacherTithe,
     }));
 
     return {
@@ -1435,6 +1488,7 @@ export function createApiRouter(): Router {
       term: opts.term,
       streak,
       streakBonus,
+      teacherTithe,
     };
   }
 

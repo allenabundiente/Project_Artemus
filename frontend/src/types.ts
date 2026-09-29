@@ -366,6 +366,8 @@ export interface ScoreResultResponse {
   coinsPenalty?: number;
   /** Server-confirmed total balance AFTER this quest settled. */
   coins: number;
+  /** 10% tithe credited to the guild teacher on successful quests (0 otherwise). */
+  teacherTithe?: number;
   breakdown: { label: string; value: number }[];
   rank: RankName | string;
   term: string;

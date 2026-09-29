@@ -6,6 +6,8 @@ import GuildSettings from './GuildSettings';
 import Leaderboard from './Leaderboard';
 import AvatarSprite, { DEFAULT_AVATAR } from './AvatarSprite';
 import Wardrobe from './Wardrobe';
+import Shop from './Shop';
+import TeacherTithe from './TeacherTithe';
 import RoyalGate from './RoyalGate';
 import ChallengeReview from './ChallengeReview';
 import Announcements from './Announcements';
@@ -19,7 +21,7 @@ interface Props {
   onSignOut: () => void;
 }
 
-type View = 'home' | 'settings' | 'leaderboard' | 'wardrobe' | 'review' | 'mapeditor';
+type View = 'home' | 'settings' | 'leaderboard' | 'wardrobe' | 'shop' | 'tithe' | 'review' | 'mapeditor';
 
 export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut }: Props) {
   const [view, setView] = useState<View>('home');
@@ -317,6 +319,12 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
           {view !== 'home' && <button className="pixel-btn pixel-btn--ghost" onClick={() => setView('home')}>◀ HALL</button>}
           <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.65rem' }} onClick={() => setView('wardrobe')} title="Customize your heraldic look">
             👤 WARDROBE
+          </button>
+          <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.65rem' }} onClick={() => setView('shop')} title="Spend your hard-earned tithe — teachers shop too">
+            🛒 SHOP
+          </button>
+          <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.65rem' }} onClick={() => setView('tithe')} title="Each student's earnings and the 10% cut you collected">
+            💰 TITHE
           </button>
           <button className="pixel-btn pixel-btn--ghost" onClick={onSignOut}>SIGN OUT</button>
         </div>
@@ -643,6 +651,17 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
           <Wardrobe initial={user.avatar ?? DEFAULT_AVATAR} onSaved={async (avatar) => { await onRefreshUser(); setNotice('Look saved! Your heraldry rides with you.'); void avatar; }} />
         </RoyalGate>
       )}
+
+      {/* The shop is not just for students: every tithe-paying teacher spends
+          their cut here (skins, heraldry, bundles) — same RoyalGate as students. */}
+      {view === 'shop' && (
+        <RoyalGate feature="shop">
+          <Shop user={user} onUserUpdated={() => onRefreshUser()} />
+        </RoyalGate>
+      )}
+
+      {/* The ledger of the tithe: per-student earnings + the teacher's 10% cut. */}
+      {view === 'tithe' && <TeacherTithe />}
 
       {/* Guild master tools: post to the notice board; chat pill stays handy. */}
       {view === 'home' && guild && (

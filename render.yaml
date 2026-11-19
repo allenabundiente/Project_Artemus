@@ -32,8 +32,19 @@ services:
 
     envVars:
       # Paste your Supabase connection string when Render prompts you.
-      # For this long-lived Express server, the DIRECT connection
-      # (port 5432) is recommended — see backend/.env.example.
+      #
+      # ⚠️ Use the SHARED POOLER (Supavisor) host, NOT the "direct" host.
+      # Supabase's direct host (db.<project-ref>.supabase.co:5432) resolves to
+      # IPv6 ONLY, and Render has no outbound IPv6 — a direct URL means the
+      # container can never reach Postgres.
+      #
+      #   session mode (recommended for this long-lived server):
+      #     postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+      #   transaction mode (for serverless / many short connections):
+      #     postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?sslmode=require
+      #
+      # Copy the exact URI from Supabase → Project Settings → Database →
+      # Connection string (URI) and keep the ?sslmode=require suffix.
       - key: DATABASE_URL
         sync: false
 

@@ -82,8 +82,16 @@ Prefer containers? `docker build -t questbook . && docker run -p 8080:8080 -e DA
 The repo ships a [Render Blueprint](https://render.com/docs/blueprint-spec) (`render.yaml`) that stands the whole thing up as **one free-tier web service** — the Docker image builds the frontend, serves the SPA + API on a single port, and applies migrations automatically on every boot.
 
 1. Push this repo to GitHub and open <https://dashboard.render.com/select-repo-or-blank> → **New → Blueprint** → pick the repo. Render reads `render.yaml` and shows you what it will create.
-2. When prompted, paste your **`DATABASE_URL`** (the Supabase connection string from step 2 above — for this long-lived server, the **direct** connection, port 5432, is recommended over the pooled one). `JWT_SECRET` is generated for you. `PORT` is injected by Render and `server.ts` already honors it; just don't set `API_PORT`.
+2. When prompted, paste your **`DATABASE_URL`** — the Supabase **shared pooler** connection string from step 2 above. Do **not** use the "direct connection" string: Supabase's direct host (`db.<project-ref>.supabase.co:5432`) is IPv6-only and Render has no outbound IPv6, so the container can never reach the database. Session mode (port 5432 on the pooler host) is the right choice for this long-lived server:
+
+   ```
+   postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+   ```
+
+   Keep the `?sslmode=require` suffix. `JWT_SECRET` is generated for you. `PORT` is injected by Render and `server.ts` already honors it; just don't set `API_PORT`.
 3. Deploy. Health check is `GET /health` (reports DB + LLM mode), and with `autoDeployTrigger: checksPass` each push deploys only after CI is green.
+
+   Migrations run on boot but are **not** fatal: if Postgres is unreachable (wrong URL, paused project, IP not reachable) the container still starts, `/health` answers, and the boot log shows the migration error. Fix `DATABASE_URL` in the service's Environment tab and redeploy to apply the schema — the app's own routes need it.
 
 Two Render-free-tier caveats worth knowing:
 

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApiRouter } from './routes/api.js';
 import { llmModeLabel } from './services/llmClient.js';
+import { createIntegrationsRouter, integrationStatus, initSentry, sentryErrorHandler } from './services/integrations.js';
 
 const PORT = Number(process.env.API_PORT || process.env.PORT || 4010);
 
@@ -13,9 +14,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/health', (_req, res) => res.json({ ok: true, llm: llmModeLabel(), db: !!process.env.DATABASE_URL }));
+app.get('/health', (_req, res) => res.json({ ok: true, llm: llmModeLabel(), db: !!process.env.DATABASE_URL, integrations: integrationStatus() }));
 
 app.use('/api', createApiRouter());
+// Optional third-party integrations (all env-gated; every route 503s or no-ops
+// when its service is unconfigured).
+app.use('/api/integrations', createIntegrationsRouter());
 
 // --- static frontend (single-server deployment / Docker) ---------------------
 // If a built frontend exists at ../public (i.e. frontend/dist copied in by the
@@ -27,6 +31,10 @@ if (fs.existsSync(path.join(publicDir, 'index.html'))) {
   app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
   console.log(`[questbook] serving frontend from ${publicDir}`);
 }
+
+// Registered after every route + the SPA fallback, so only errors that reach
+// next(err) land here. A no-op unless SENTRY_DSN is set and @sentry/node installed.
+app.use(sentryErrorHandler);
 
 /**
  * Keep serving after stray async failures. Node 15+ crashes the process on an
@@ -41,6 +49,9 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('[fatal-guard] uncaught exception (server stays up):', err);
 });
+
+// Optional: enabled only when SENTRY_DSN is set (and @sentry/node is installed).
+await initSentry();
 
 app.listen(PORT, () => {
   console.log(`[questbook] backend listening on http://localhost:${PORT}`);

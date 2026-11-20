@@ -76,3 +76,55 @@ services:
       #                        backend/.env.example for per-host values)
       #   OPENAI_API_KEY
       #   LLM_MODEL
+
+      # --- Optional third-party integrations -------------------------------
+      # All blank by default: each feature turns itself off and every endpoint
+      # behaves exactly as it does today. Fill in only the ones you want in
+      # Dashboard → questbook → Environment. GET /health shows which are active.
+      #
+      # Judge0 (code runner)
+      - key: JUDGE0_URL
+        sync: false
+      - key: JUDGE0_KEY
+        sync: false
+      - key: JUDGE0_HOST
+        sync: false
+      # Cloudflare Turnstile (signup/login CAPTCHA)
+      - key: TURNSTILE_SECRET
+        sync: false
+      # Resend (transactional email)
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        sync: false
+      # Upstash Redis (LLM-output cache, rate limits)
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      # OCR.space (scanned-PDF fallback)
+      - key: OCR_SPACE_API_KEY
+        sync: false
+      # LanguageTool (grammar checks; public API needs no key)
+      - key: LANGUAGETOOL_URL
+        sync: false
+      - key: LANGUAGETOOL_USER
+        sync: false
+      - key: LANGUAGETOOL_KEY
+        sync: false
+      # LibreTranslate (translation)
+      - key: LIBRETRANSLATE_URL
+        sync: false
+      - key: LIBRETRANSLATE_KEY
+        sync: false
+      # OneSignal (web push)
+      - key: ONESIGNAL_APP_ID
+        sync: false
+      - key: ONESIGNAL_REST_API_KEY
+        sync: false
+      # OpenAI Moderation (guild-chat screening)
+      - key: OPENAI_MODERATION_KEY
+        sync: false
+      # Sentry (error tracking; also needs `npm i @sentry/node`)
+      - key: SENTRY_DSN
+        sync: false

@@ -10,6 +10,7 @@ import { buildLessonOverview } from '../services/lesson.js';
 import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, signToken } from '../services/auth.js';
 import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
 import { registerAdminRoutes, fetchCustomThemes } from './admin.js';
+import { moderateText, ocrPdf, cacheGet, cacheSet, hashKey, integrationStatus, requireCaptcha } from '../services/integrations.js';
 import { gameModeTimeBonus, gameModeLabel, isGameMode, GAME_MODES } from '../services/gameModes.js';
 import { generateDungeonMap, validateDungeonMap } from '../services/dungeonGenerator.js';
 import {
@@ -102,24 +103,35 @@ export async function generateChallengesForBook(
   let failedChapters = 0;
 
   for (const chapter of selectedChapters) {
-    let content: ChapterContent;
-    try {
-      content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter, perChapterTarget(target, chapters.length));
-    } catch (e) {
-      llmFailures++;
-      failedChapters++;
-      console.error(`[generate] chapter "${chapter.title}" fell back to heuristics:`, (e as Error).message);
-      try {
-        content = generateHeuristically(chapter, perChapterTarget(target, chapters.length));
-      } catch (he) {
-        // Even the deterministic fallback died (corrupt chapter data?). Keep
-        // the OLD challenges for this chapter and move on — never leave the
-        // book empty because one chapter could not be rebuilt.
-        console.error(`[generate] heuristic fallback also failed for "${chapter.title}":`, (he as Error).message);
-        continue;
-      }
+    let content: ChapterContent | null = null;
+    // Optional LLM-output cache (Upstash REST). No Redis configured → cacheKey
+    // stays null, nothing is fetched or stored, and the path below is unchanged.
+    let cacheKey: string | null = null;
+    if (useLlm && integrationStatus().redis) {
+      cacheKey = `gen:${await hashKey(JSON.stringify({ text: chapter.text, title: chapter.title, opts: genOpts }))}`;
+      content = await cacheGet<ChapterContent>(cacheKey);
     }
-    if (content.challenges.length === 0) continue;
+    if (!content) {
+      try {
+        content = useLlm ? await generateWithLlm(chapter, genOpts) : generateHeuristically(chapter, perChapterTarget(target, chapters.length));
+      } catch (e) {
+        llmFailures++;
+        failedChapters++;
+        console.error(`[generate] chapter "${chapter.title}" fell back to heuristics:`, (e as Error).message);
+        try {
+          content = generateHeuristically(chapter, perChapterTarget(target, chapters.length));
+        } catch (he) {
+          // Even the deterministic fallback died (corrupt chapter data?). Keep
+          // the OLD challenges for this chapter and move on — never leave the
+          // book empty because one chapter could not be rebuilt.
+          console.error(`[generate] heuristic fallback also failed for "${chapter.title}":`, (he as Error).message);
+          continue;
+        }
+      }
+      // Store only what was just generated — a cache hit needs no re-store.
+      if (cacheKey && content) await cacheSet(cacheKey, content, 60 * 60 * 24 * 7);
+    }
+    if (!content || content.challenges.length === 0) continue;
     // Replace-mode wipes THIS chapter's old set only after the new batch is
     // in hand, so a wipe is always followed by a successful write (no more
     // "regenerate failed → tome left with zero monsters").
@@ -312,7 +324,8 @@ export function createApiRouter(): Router {
 
   // --- auth ------------------------------------------------------------------
 
-  router.post('/auth/signup', async (req, res) => {
+  // requireCaptcha is a pass-through whenever TURNSTILE_SECRET is unset.
+  router.post('/auth/signup', requireCaptcha, async (req, res) => {
     try {
       const { name, email, password, role } = req.body ?? {};
       if (typeof name !== 'string' || name.trim().length < 2) return res.status(400).json({ error: 'Name must be at least 2 characters' });
@@ -332,7 +345,7 @@ export function createApiRouter(): Router {
     }
   });
 
-  router.post('/auth/login', async (req, res) => {
+  router.post('/auth/login', requireCaptcha, async (req, res) => {
     try {
       const { email, password } = req.body ?? {};
       if (typeof email !== 'string' || typeof password !== 'string') return res.status(400).json({ error: 'Email and password required' });
@@ -720,6 +733,10 @@ export function createApiRouter(): Router {
       if (!message) return res.status(400).json({ error: 'Message cannot be empty' });
       if (message.length > 1000) return res.status(400).json({ error: 'Message too long (max 1000 characters)' });
 
+      // Optional moderation (OPENAI_MODERATION_KEY). Unset → always passes.
+      const verdict = await moderateText(message);
+      if (verdict.flagged) return res.status(400).json({ error: 'Message blocked by moderation' });
+
       const newMsg = await insertGuildMessage(guild.id, user.id, message);
       res.status(201).json({ message: { ...newMsg, rank: rankForScore(await getTermScore(user.id, null)) } });
     } catch (e: any) {
@@ -944,7 +961,19 @@ export function createApiRouter(): Router {
         return res.status(403).json({ error: 'Guild members play the books their teacher assigns — leave the guild to upload your own.' });
       }
 
-      const parsed = await parsePdf(req.file.buffer, fallbackTitle);
+      // Text-based PDFs go straight through. A scanned/image-only one (the
+      // "no extractable text" error parsePdf throws) gets a single OCR attempt
+      // when OCR_SPACE_API_KEY is set; without the key or a usable OCR result,
+      // the original 400 below is exactly what the caller saw before.
+      let parsed: Awaited<ReturnType<typeof parsePdf>>;
+      try {
+        parsed = await parsePdf(req.file.buffer, fallbackTitle);
+      } catch (e: any) {
+        const noText = typeof e?.message === 'string' && e.message.includes('scanned or image-based');
+        const ocrText = noText ? await ocrPdf(req.file.buffer, req.file.originalname) : null;
+        if (!ocrText) throw e;
+        parsed = { title: fallbackTitle, chapters: [{ title: fallbackTitle, text: ocrText, codeBlocks: [] }] };
+      }
       // Teacher/admin uploads are assigned to the guild they lead; solo students own their books.
       let guildId: string | null = null;
       if (user.role === 'teacher' || user.role === 'admin') {

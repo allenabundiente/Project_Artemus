@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AvatarPrefs, DungeonEvent, DungeonFetchResult, ScoreResultResponse, Term } from '../types';
+import type { AvatarPrefs, Challenge, DungeonEvent, DungeonFetchResult, GameMode, ScoreResultResponse, Term } from '../types';
 import * as api from '../api';
 import { DungeonEngine } from '../game/dungeonEngine';
 import { sfx } from '../game/sfx';
@@ -8,19 +8,22 @@ import BattleScreen from './BattleScreen';
 import RuneSocketDialog from './RuneSocketDialog';
 import ChestLockDialog from './ChestLockDialog';
 import TouchControls from './TouchControls';
+import { gameModeLabel, gameModeRules, pickBossQueue, resolveGameMode } from '../game/gameModes';
 
 interface Props {
   bookId: string;
   chapterId: string;
   chapterIdx: number;
   term: Term;
+  /** How this tome is played — the teacher's per-book choice ('classic' by default). */
+  gameMode?: GameMode;
   avatar?: AvatarPrefs;
   onExit: () => void;
   onComplete: (chapterId: string, result: ScoreResultResponse) => void;
   onFailSettled?: (chapterId: string, result: ScoreResultResponse) => void;
 }
 
-type Phase = 'loading' | 'playing' | 'event' | 'gameover';
+type Phase = 'loading' | 'playing' | 'event' | 'gameover' | 'boss';
 
 /**
  * The Depths: top-down dungeon quest. Loads the chapter's generated map
@@ -28,7 +31,7 @@ type Phase = 'loading' | 'playing' | 'event' | 'gameover';
  * right dialog per event type. Monster gates reuse the classic BattleScreen
  * (hearts + queue-of-one) so the look stays consistent.
  */
-export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, avatar, onExit, onComplete, onFailSettled }: Props) {
+export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, gameMode, avatar, onExit, onComplete, onFailSettled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<DungeonEngine | null>(null);
   const startedAtRef = useRef<number>(Date.now());
@@ -48,6 +51,13 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, ava
   useEffect(() => {
     setIsTouch(window.matchMedia?.('(pointer: coarse)').matches ?? false);
   }, []);
+  /** Mode rules: classic keeps the Depths exactly as it is (no clock). */
+  const [mode, setMode] = useState<GameMode>(resolveGameMode(gameMode));
+  /** Speedrun's per-level clock (null = no countdown, the Depths default). */
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  /** Boss Rush: the chapter's hardest questions, fought at the portal. */
+  const [bossQueue, setBossQueue] = useState<Challenge[] | null>(null);
+  const bossQueueRef = useRef<Challenge[] | null>(null);
 
   const finishQuest = useCallback(
     async (finished: boolean, livesRemaining: number) => {
@@ -112,8 +122,26 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, ava
     let cancelled = false;
     (async () => {
       try {
-        const res = await api.getDungeon(bookId, chapterId, term);
+        // The mode rides on the book; the term's countdown comes from the same
+        // endpoint the classic level uses, and Boss Rush needs the chapter's
+        // own challenge list to build its boss.
+        const activeMode = resolveGameMode(gameMode);
+        const [res, termInfo, bossChallenges] = await Promise.all([
+          api.getDungeon(bookId, chapterId, term),
+          api.getTermSettings(term),
+          activeMode === 'boss'
+            ? api.getChallenges(bookId, chapterId).catch(() => [] as Challenge[])
+            : Promise.resolve([] as Challenge[]),
+        ]);
         if (cancelled) return;
+        const rules = gameModeRules(activeMode, termInfo.settings.timeLimitSeconds);
+        setMode(activeMode);
+        setTimeLeft(rules.timeLimitSeconds);
+        if (activeMode === 'boss' && bossChallenges.length > 0) {
+          const queue = pickBossQueue(bossChallenges);
+          bossQueueRef.current = queue;
+          setBossQueue(queue);
+        }
         setGenInfo(res);
         setTotalEvents(res.map.dungeon_events.length);
         const canvas = canvasRef.current;
@@ -124,7 +152,15 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, ava
             setPhase('event');
           },
           onPortalOpen: () => { /* HUD hint updates via cleared/keys state */ },
-          onExit: () => void finishQuestRef.current(true, engine.getLives()),
+          onExit: () => {
+            // Boss Rush: the portal is guarded — the chapter's hardest questions
+            // must be answered before the quest counts as complete.
+            if (bossQueueRef.current && bossQueueRef.current.length > 0) {
+              setPhase('boss');
+              return;
+            }
+            void finishQuestRef.current(true, engine.getLives());
+          },
           onStateChange: (s) => setHud(s),
           onGameOver: () => {
             setPhase('gameover');
@@ -152,6 +188,25 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, ava
   useEffect(() => {
     engineRef.current?.setPaused(phase !== 'playing');
   }, [phase]);
+
+  // Speedrun: a per-level countdown. Every other mode leaves timeLeft null, so
+  // the Depths keeps its historic clock-free run.
+  useEffect(() => {
+    if (phase !== 'playing' && phase !== 'event' && phase !== 'boss') return;
+    if (timeLeft === null) return;
+    if (timeLeft <= 0) {
+      void failQuestRef.current('out_of_time');
+      return;
+    }
+    const t = window.setTimeout(() => setTimeLeft((s) => (s === null ? null : s - 1)), 1000);
+    return () => window.clearTimeout(t);
+  }, [timeLeft, phase]);
+
+  /** Boss Rush: a wrong answer costs a heart (zero ends the run). */
+  function handleBossDamage() {
+    mistakesRef.current += 1;
+    engineRef.current?.damage();
+  }
 
   // Keep the cleared-count HUD fresh after each event.
   useEffect(() => {
@@ -195,6 +250,14 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, ava
     <div style={{ maxWidth: 960, margin: '0 auto' }}>
       <div className="hud" style={{ marginBottom: '0.75rem', flexWrap: 'wrap' }}>
         <span className="label">QUEST {chapterIdx + 1} · THE DEPTHS</span>
+        {mode !== 'classic' && (
+          <span className="pixel-font" style={{ fontSize: '0.55rem', color: 'var(--p-yellow)' }}>{gameModeLabel(mode).toUpperCase()}</span>
+        )}
+        {timeLeft !== null && (
+          <span style={{ color: timeLeft <= 30 ? 'var(--d-rose)' : 'var(--d-gold)' }}>
+            ⏳ {String(Math.floor(timeLeft / 60)).padStart(2, '0')}:{String(timeLeft % 60).padStart(2, '0')}
+          </span>
+        )}
         <span style={{ display: 'flex', alignItems: 'center' }}>
           {Array.from({ length: 3 }, (_, i) => (
             <img
@@ -286,6 +349,21 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, ava
           ) : (
             <ChestLockDialog event={activeEvent} onResult={resolveEvent} />
           )}
+        </div>
+      )}
+
+      {phase === 'boss' && bossQueue && (
+        <div className="modal-overlay">
+          <BattleScreen
+            key="dungeon-boss"
+            queue={bossQueue}
+            maxHp={bossQueue.length}
+            lives={hud.lives}
+            boss
+            onDamage={handleBossDamage}
+            onRetreat={() => setPhase('playing')}
+            onVictory={() => void finishQuestRef.current(true, engineRef.current?.getLives() ?? 0)}
+          />
         </div>
       )}
 

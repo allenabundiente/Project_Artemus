@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
-import type { AuthUser, BookDetail, BookMeta, GuildInfo, Progress, Term } from '../types';
+import type { AuthUser, BookDetail, BookMeta, GuildClassGroup, GuildInfo, Progress, Term } from '../types';
+import { gameModeLabel } from '../game/gameModes';
 import { spriteDataUrl } from '../game/sprites';
 import { rankForScore } from '../game/ranks';
 import { onHudCoins } from '../game/hudCoins';
@@ -56,6 +57,8 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
   }, [user.id]);
   const [view, setView] = useState<View>({ name: 'home' });
   const [books, setBooks] = useState<BookMeta[]>([]);
+  /** The guild's books grouped by the professor who uploaded them. */
+  const [classes, setClasses] = useState<GuildClassGroup[]>([]);
   const [book, setBook] = useState<BookDetail | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [passcode, setPasscode] = useState('');
@@ -97,7 +100,16 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
     } catch (e) {
       setError((e as Error).message);
     }
-  }, []);
+    // Guild members see one section per professor. The flat list above stays
+    // the fallback (solo players, or a guild with no classes yet).
+    if (guild) {
+      try {
+        setClasses(await api.getGuildClasses());
+      } catch {
+        setClasses([]);
+      }
+    }
+  }, [guild]);
 
   // The wardrobe's locked-set rows deep-link into the shop.
   useEffect(() => {
@@ -246,6 +258,27 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
     },
     [book, user, onUserUpdated]
   );
+
+  /** One tome row — shared by the flat list and the professor-grouped view. */
+  function bookRow(b: BookMeta) {
+    return (
+      <li key={b.id} style={{ marginBottom: '0.5rem' }}>
+        <button className="pixel-btn pixel-btn--ghost" style={{ width: '100%', textAlign: 'left', textTransform: 'none' }} onClick={() => openBook(b.id)}>
+          ▸ {b.title}
+          {b.gameMode && b.gameMode !== 'classic' && (
+            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)', marginLeft: '0.4rem' }}>
+              {gameModeLabel(b.gameMode).toUpperCase()}
+            </span>
+          )}
+        </button>
+        {typeof b.challengeCount === 'number' && b.challengeCount === 0 && (
+          <p className="term-font" style={{ margin: '0.15rem 0 0', color: 'var(--d-rose)', fontSize: '0.95rem' }}>
+            ⚠ This tome has no monsters yet — summon them by uploading it again.
+          </p>
+        )}
+      </li>
+    );
+  }
 
   return (
     <div style={{ minHeight: '100vh', padding: '1.5rem', position: 'relative' }}>
@@ -406,20 +439,26 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
                 {guild ? (leads ? 'No quests yet — upload a PDF above to arm your adventurers.' : 'Your teacher has not uploaded any tomes yet.') : 'Upload a tome above to begin your quest.'}
               </p>
             )}
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {books.map((b) => (
-                <li key={b.id} style={{ marginBottom: '0.5rem' }}>
-                  <button className="pixel-btn pixel-btn--ghost" style={{ width: '100%', textAlign: 'left', textTransform: 'none' }} onClick={() => openBook(b.id)}>
-                    ▸ {b.title}
-                  </button>
-                  {typeof b.challengeCount === 'number' && b.challengeCount === 0 && (
-                    <p className="term-font" style={{ margin: '0.15rem 0 0', color: 'var(--d-rose)', fontSize: '0.95rem' }}>
-                      ⚠ This tome has no monsters yet — summon them by uploading it again.
-                    </p>
+            {guild && classes.length > 0 ? (
+              classes.map((group) => (
+                <div key={group.professor.id} style={{ marginBottom: '0.75rem' }}>
+                  <p className="pixel-font" style={{ fontSize: '0.55rem', color: 'var(--d-stone-light)', margin: '0 0 0.35rem' }}>
+                    👩‍🏫 {group.professor.name}'s classes
+                  </p>
+                  {group.books.length === 0 ? (
+                    <p className="term-font" style={{ margin: 0, color: 'var(--d-stone-light)', fontSize: '0.95rem' }}>No classes yet.</p>
+                  ) : (
+                    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                      {group.books.map((b) => bookRow(b))}
+                    </ul>
                   )}
-                </li>
-              ))}
-            </ul>
+                </div>
+              ))
+            ) : (
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {books.map((b) => bookRow(b))}
+              </ul>
+            )}
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.9rem', flexWrap: 'wrap' }}>
               <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.65rem' }} onClick={() => setView({ name: 'leaderboard' })}>
                 ⚔ LEADERBOARD
@@ -463,6 +502,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           chapterId={view.chapterId}
           chapterIdx={view.chapterIdx}
           term={term}
+          gameMode={book?.gameMode ?? 'classic'}
           avatar={user.avatar}
           onExit={() => setView({ name: 'map', bookId: view.bookId })}
           onComplete={onQuestComplete}
@@ -476,6 +516,7 @@ export default function StudentDashboard({ user: userProp, guild, onUserUpdated,
           chapterId={view.chapterId}
           chapterIdx={view.chapterIdx}
           term={term}
+          gameMode={book?.gameMode ?? 'classic'}
           avatar={user.avatar}
           onExit={() => setView({ name: 'map', bookId: view.bookId })}
           onComplete={onQuestComplete}

@@ -10,6 +10,7 @@ import { buildLessonOverview } from '../services/lesson.js';
 import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, signToken } from '../services/auth.js';
 import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
 import { registerAdminRoutes, fetchCustomThemes } from './admin.js';
+import { gameModeTimeBonus, gameModeLabel, isGameMode, GAME_MODES } from '../services/gameModes.js';
 import { generateDungeonMap, validateDungeonMap } from '../services/dungeonGenerator.js';
 import {
   getMapMode, setMapMode, getDungeonMap, insertDungeonMap,
@@ -23,6 +24,9 @@ import {
   countChallenges, deleteChallengesForBook, deleteChallengesForChapter, getProgress, upsertProgress,
   getUserByEmail, getUserById, insertUser, addCoins,
   insertGuild, attachOrphanBooksToGuild, regeneratePasscode, getGuild, getGuildByTeacher, getGuildByPasscode,
+  getGuildByProfessorPasscode, getGuildTeacherRole, listGuildTeachers, addGuildTeacher, removeGuildTeacher,
+  regenerateProfessorPasscode, ensureProfessorPasscode, listGuildBooks, updateBookGameMode,
+  type GuildTeacherRole, type GuildBookRow,
   getGuildMessages, getGuildMessagesSince, insertGuildMessage, deleteGuildMessage,
   getAnnouncements, insertAnnouncement, deleteAnnouncement, getLatestAnnouncementTime,
   getStreak, updateStreak, STREAK_BONUS_COINS, getStreakCalendar, getGuildStreaks, isStreakAtRisk, effectiveStreak,
@@ -128,11 +132,53 @@ export async function generateChallengesForBook(
   return { challengeCount: generated, llmFailures, failedChapters, mode: useLlm ? 'llm' : 'heuristic' };
 }
 
-/** Can this user manage the book (owner, guild teacher, or any admin)? */
-function canManageBook(user: UserRow, book: BookRow): boolean {
+/** A teacher's role inside a guild ('owner' = the founding teacher). */
+async function guildTeachingRole(user: UserRow, guildId: string | null): Promise<GuildTeacherRole | null> {
+  if (!guildId) return null;
+  if (user.role === 'admin') return 'owner';
+  if (user.role !== 'teacher') return null;
+  return getGuildTeacherRole(guildId, user.id);
+}
+
+/** Owner-only guild controls: term settings, map skin, codes, staff. */
+async function isGuildOwner(user: UserRow, guild: GuildRow): Promise<boolean> {
+  if (user.role === 'admin') return true;
+  return (await guildTeachingRole(user, guild.id)) === 'owner';
+}
+
+/**
+ * Can this user MANAGE the book? Its uploader, any admin, or the guild's OWNER
+ * (who manages every tome of the guild, exactly as the single teacher always
+ * could). A professor manages only the books they uploaded — which needs no
+ * special case, because uploading sets books.owner_id to them.
+ */
+async function canManageBook(user: UserRow, book: BookRow): Promise<boolean> {
   if (user.role === 'admin') return true;
   if (book.ownerId === user.id) return true;
-  return !!(book.guildId && user.role === 'teacher' && user.guildId === book.guildId);
+  return (await guildTeachingRole(user, book.guildId)) === 'owner';
+}
+
+/** Can this user SEE/PLAY the book (guild member, professor, uploader, admin)? */
+async function canViewBook(user: UserRow, book: BookRow): Promise<boolean> {
+  if (user.role === 'admin') return true;
+  if (book.ownerId === user.id) return true;
+  if (!book.guildId) return false;
+  if (user.guildId === book.guildId) return true; // student member
+  return (await guildTeachingRole(user, book.guildId)) !== null;
+}
+
+/**
+ * Who collects the tithe on a completed quest? The professor who uploaded the
+ * book, when they still teach in the student's guild; otherwise the guild
+ * owner — the historic behaviour, and the fallback for ownerless books.
+ */
+async function resolveTitheRecipient(guild: GuildRow | null, book: BookRow | null): Promise<string | null> {
+  if (!guild) return null;
+  if (book?.ownerId) {
+    const owner = await getUserById(book.ownerId);
+    if (owner && owner.role === 'teacher' && (await guildTeachingRole(owner, guild.id)) !== null) return owner.id;
+  }
+  return guild.teacherId;
 }
 
 /** Human-readable reason a book is not playable right now. */
@@ -306,9 +352,14 @@ export function createApiRouter(): Router {
     if (!user) return res.status(404).json({ error: 'User not found' });
     const guild = await resolveUserGuild(user);
     const prefs = user.preferences as { avatar?: Record<string, unknown> } | null;
+    // Students see who teaches them; the professors array is additive (a
+    // single-teacher guild returns just its owner).
+    const professors = guild
+      ? (await listGuildTeachers(guild.id)).map((t) => ({ id: t.id, name: t.name, role: t.role }))
+      : [];
     res.json({
       user: { ...publicUser(user), avatar: sanitizeAvatar(prefs?.avatar ?? prefs) },
-      guild: guild ? { id: guild.id, name: guild.name } : null,
+      guild: guild ? { id: guild.id, name: guild.name, professors } : null,
     });
   });
 
@@ -379,8 +430,14 @@ export function createApiRouter(): Router {
   });
 
   router.put('/guilds/mine/map', requireRole('teacher'), async (req, res) => {
-    const guild = await getGuildByTeacher(req.user!.id);
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = await getGuildByTeacher(user.id);
     if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    // Guild-wide look is owner-only.
+    if (!(await isGuildOwner(user, guild))) {
+      return res.status(403).json({ error: 'Only the guild owner can change the guild map' });
+    }
     const theme = req.body?.theme === null || req.body?.theme === '' ? null : String(req.body?.theme ?? '');
     if (theme !== null && !/^[a-z0-9_-]{1,32}$/.test(theme)) return res.status(400).json({ error: 'Invalid theme id' });
     await setGuildMapTheme(guild.id, theme);
@@ -416,12 +473,125 @@ export function createApiRouter(): Router {
         avatar: sanitizeAvatar((m.preferences as { avatar?: unknown })?.avatar ?? m.preferences),
       };
     }));
-    res.json({ guild: { id: guild.id, name: guild.name, passcode: guild.passcode, termSettings: guild.termSettings }, roster });
+    // The guild's teaching staff (owner first). Additive: every existing
+    // single-teacher guild answers with exactly one 'owner' entry.
+    const staff = await listGuildTeachers(guild.id);
+    const professors = staff.map((t) => ({ id: t.id, name: t.name, role: t.role }));
+    const me = await getUserById(req.user!.id);
+    const role = me ? await guildTeachingRole(me, guild.id) : null;
+    // Only the owner sees the professor invite code; professors have no staff
+    // controls at all.
+    const professorPasscode = role === 'owner' ? await ensureProfessorPasscode(guild.id) : null;
+    res.json({
+      guild: {
+        id: guild.id, name: guild.name, passcode: guild.passcode, termSettings: guild.termSettings,
+        professors, professorPasscode, role,
+      },
+      role,
+      professors,
+      roster,
+    });
+  });
+
+  // --- guild staff: owner + professors ---------------------------------------------
+  //
+  // guilds.teacher_id stays the guild OWNER. Professors live in guild_teachers
+  // and share the day-to-day work (their own books, announcements, roster,
+  // chat moderation) without the owner-only controls below.
+
+  /** Owner: mint a fresh professor invite code (the old one stops working). */
+  router.post('/guilds/mine/professor-passcode', requireRole('teacher'), async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = await getGuildByTeacher(user.id);
+    if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    if (!(await isGuildOwner(user, guild))) {
+      return res.status(403).json({ error: 'Only the guild owner can change the professor code' });
+    }
+    const updated = await regenerateProfessorPasscode(guild.id);
+    res.json({ professorPasscode: updated.professorPasscode });
+  });
+
+  /** The guild's teaching staff — readable by every member (students included). */
+  router.get('/guilds/mine/professors', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(404).json({ error: 'You are not in a guild' });
+    const staff = await listGuildTeachers(guild.id);
+    const role = await guildTeachingRole(user, guild.id);
+    res.json({
+      professors: staff.map((t) => ({ id: t.id, name: t.name, role: t.role })),
+      professorPasscode: role === 'owner' ? await ensureProfessorPasscode(guild.id) : null,
+    });
+  });
+
+  /**
+   * Owner: remove a professor. Their uploaded books STAY in the guild (students
+   * keep their content); those books then group under the guild owner.
+   */
+  router.delete('/guilds/mine/professors/:userId', requireRole('teacher'), async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = await getGuildByTeacher(user.id);
+    if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    if (!(await isGuildOwner(user, guild))) {
+      return res.status(403).json({ error: 'Only the guild owner can remove professors' });
+    }
+    const targetId = String(req.params.userId);
+    if (targetId === guild.teacherId) return res.status(400).json({ error: 'The guild owner cannot be removed' });
+    const target = await getUserById(targetId);
+    if (!target || target.role !== 'teacher') return res.status(404).json({ error: 'That professor is not in this guild' });
+    const removed = await removeGuildTeacher(guild.id, targetId);
+    if (!removed) return res.status(404).json({ error: 'That professor is not in this guild' });
+    res.json({ removed: { id: target.id, name: target.name } });
+  });
+
+  /**
+   * The guild's classes grouped by professor: [{ professor, books }].
+   * Uses books.owner_id; a book whose uploader is not (or no longer) a
+   * professor of this guild — and any ownerless book — groups under the guild
+   * owner, so no class can ever disappear from the list.
+   */
+  router.get('/guilds/mine/classes', requireAuth, async (req, res) => {
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = await resolveUserGuild(user);
+    if (!guild) return res.status(404).json({ error: 'You are not in a guild' });
+
+    const staff = await listGuildTeachers(guild.id);
+    const staffIds = new Set(staff.map((t) => t.id));
+    const ownerEntry = staff.find((t) => t.role === 'owner');
+    const ownerId = ownerEntry?.id ?? guild.teacherId;
+    const ownerName = ownerEntry?.name ?? (await getUserById(guild.teacherId))?.name ?? 'Guild owner';
+
+    const groups = new Map<string, { professor: { id: string; name: string }; books: GuildBookRow[] }>();
+    groups.set(ownerId, { professor: { id: ownerId, name: ownerName }, books: [] });
+    for (const t of staff) {
+      if (!groups.has(t.id)) groups.set(t.id, { professor: { id: t.id, name: t.name }, books: [] });
+    }
+
+    const visible: GuildBookRow[] = [];
+    for (const b of await listGuildBooks(guild.id)) {
+      // Players never see locked / out-of-window tomes; teachers still do.
+      if (isBookPlayable(b) || user.role !== 'student' || (await canManageBook(user, b))) visible.push(b);
+    }
+    for (const b of visible) {
+      const key = b.ownerId && staffIds.has(b.ownerId) ? b.ownerId : ownerId;
+      groups.get(key)!.books.push(b);
+    }
+    res.json([...groups.values()]);
   });
 
   router.post('/guilds/mine/regenerate-passcode', requireRole('teacher'), async (req, res) => {
-    const guild = await getGuildByTeacher(req.user!.id);
+    const user = await getUserById(req.user!.id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+    const guild = await getGuildByTeacher(user.id);
     if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+    // Guild-wide codes are owner-only; professors cannot lock students out.
+    if (!(await isGuildOwner(user, guild))) {
+      return res.status(403).json({ error: 'Only the guild owner can change the guild code' });
+    }
     const updated = await regeneratePasscode(guild.id);
     res.json({ passcode: updated.passcode });
   });
@@ -454,6 +624,38 @@ export function createApiRouter(): Router {
     }
     const updated = await removeGuildMember(member.id);
     res.json({ removed: { id: updated.id, name: updated.name } });
+  });
+
+  /**
+   * A teacher joins an existing guild with its professor code. One guild per
+   * teacher: an owner or an existing professor is rejected with 409.
+   */
+  router.post('/guilds/join-as-professor', requireRole('teacher'), async (req, res) => {
+    try {
+      const code = typeof req.body?.professorPasscode === 'string' ? req.body.professorPasscode
+        : typeof req.body?.passcode === 'string' ? req.body.passcode : '';
+      if (!code.trim()) return res.status(400).json({ error: 'Professor passcode required' });
+      const user = await getUserById(req.user!.id);
+      if (!user) return res.status(401).json({ error: 'User not found' });
+      if (await getGuildByTeacher(user.id)) {
+        return res.status(409).json({ error: 'You already belong to a guild' });
+      }
+      const guild = await getGuildByProfessorPasscode(code);
+      if (!guild) return res.status(404).json({ error: 'No guild found for that professor passcode' });
+      await addGuildTeacher(guild.id, user.id, 'professor');
+      // Books they uploaded before joining follow them in (same courtesy the
+      // founder's orphaned uploads get).
+      await attachOrphanBooksToGuild(user.id, guild.id);
+      const staff = await listGuildTeachers(guild.id);
+      res.json({
+        guild: { id: guild.id, name: guild.name, professors: staff.map((t) => ({ id: t.id, name: t.name, role: t.role })) },
+        role: 'professor' as const,
+      });
+    } catch (e: any) {
+      if (e?.code === '23505') return res.status(409).json({ error: 'You already belong to a guild' });
+      console.error('[joinAsProfessor]', e);
+      res.status(500).json({ error: 'Could not join guild' });
+    }
   });
 
   router.post('/guilds/join', requireRole('student'), async (req, res) => {
@@ -694,8 +896,14 @@ export function createApiRouter(): Router {
 
   router.put('/guilds/mine/settings', requireRole('teacher'), async (req, res) => {
     try {
-      const guild = await getGuildByTeacher(req.user!.id);
+      const user = await getUserById(req.user!.id);
+      if (!user) return res.status(401).json({ error: 'User not found' });
+      const guild = await getGuildByTeacher(user.id);
       if (!guild) return res.status(404).json({ error: 'You do not lead a guild' });
+      // Term difficulty/weights are guild-wide: owner only, never a professor.
+      if (!(await isGuildOwner(user, guild))) {
+        return res.status(403).json({ error: 'Only the guild owner can change term settings' });
+      }
       const sanitized = sanitizeTermSettings(req.body?.termSettings);
       const updated = await updateGuildTermSettings(guild.id, sanitized);
       const resolved = Object.fromEntries(TERMS.map((t) => [t, resolveTermSettings(t, updated.termSettings)]));
@@ -771,9 +979,10 @@ export function createApiRouter(): Router {
   // --- Top-down dungeon mode ("The Depths") --------------------------------------
 
   /** Same ownership rule as every other per-book route. */
-  async function canTouchBook(book: { ownerId: string | null; guildId: string | null } | null, user: UserRow | null): Promise<boolean> {
+  async function canTouchBook(book: BookRow | null, user: UserRow | null): Promise<boolean> {
     if (!book || !user) return false;
-    return book.ownerId === user.id || (!!book.guildId && user.guildId === book.guildId);
+    // Uploader, guild member, or a teacher of the guild (professors included).
+    return canViewBook(user, book);
   }
 
   /** Per-book map mode: how its chapters render ('classic' | 'topdown'). */
@@ -838,9 +1047,7 @@ export function createApiRouter(): Router {
     if (!chapter || chapter.bookId !== String(req.params.id)) return res.status(404).json({ error: 'Chapter not found' });
     const book = await getBook(chapter.bookId);
     const user = await getUserById(req.user!.id);
-    const isOwner = book && book.ownerId === user?.id;
-    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !book || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const challenges = await getChallengesForChapter(chapterId);
     const result = await generateDungeonMap(chapter, {
@@ -862,9 +1069,7 @@ export function createApiRouter(): Router {
   router.post('/books/:id/dungeon/generate', requireAuth, async (req, res) => {
     const book = await getBook(String(req.params.id));
     const user = await getUserById(req.user!.id);
-    const isOwner = book && book.ownerId === user?.id;
-    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !book || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const chapters = await getChapters(book!.id);
     let generated = 0;
@@ -888,9 +1093,7 @@ export function createApiRouter(): Router {
   router.post('/books/:id/dungeon/regenerate', requireAuth, async (req, res) => {
     const book = await getBook(String(req.params.id));
     const user = await getUserById(req.user!.id);
-    const isOwner = book && book.ownerId === user?.id;
-    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !book || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
     await deleteDungeonMapsForBook(book!.id);
     res.json({ ok: true });
   });
@@ -906,9 +1109,7 @@ export function createApiRouter(): Router {
     if (!chapter || chapter.bookId !== String(req.params.id)) return res.status(404).json({ error: 'Chapter not found' });
     const book = await getBook(chapter.bookId);
     const user = await getUserById(req.user!.id);
-    const isOwner = book && book.ownerId === user?.id;
-    const isGuildTeacher = book?.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !book || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const map = validateDungeonMap(req.body?.map);
     if (!map) return res.status(400).json({ error: 'Invalid map payload' });
@@ -926,9 +1127,7 @@ export function createApiRouter(): Router {
     // Only the uploader or the guild teacher can (re)generate.
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(401).json({ error: 'User not found' });
-    const isOwner = book.ownerId === user.id;
-    const isGuildTeacher = book.guildId && (user.role === 'teacher' || user.role === 'admin') && user.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     // Cache: if challenges already exist, skip regeneration.
     if (await countChallenges(bookId) > 0) {
@@ -977,9 +1176,12 @@ export function createApiRouter(): Router {
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(401).json({ error: 'User not found' });
     const guild = user.role === 'teacher' || user.role === 'admin' ? await getGuildByTeacher(user.id) : null;
-    const books = (await listBooks(user.id, guild?.id ?? null)).filter((b) =>
-      guild ? b.guildId === guild.id : b.ownerId === user.id
-    );
+    // Only tomes this teacher may manage: the guild owner regenerates every
+    // guild book, a professor only the ones they uploaded.
+    const books: BookRow[] = [];
+    for (const b of await listBooks(user.id, guild?.id ?? null)) {
+      if ((guild ? b.guildId === guild.id : b.ownerId === user.id) && (await canManageBook(user, b))) books.push(b);
+    }
     if (books.length === 0) return res.status(404).json({ error: 'No books to regenerate' });
 
     const term = typeof req.body?.term === 'string' && TERMS.includes(req.body.term as any) ? req.body.term : 'prelims';
@@ -1003,7 +1205,10 @@ export function createApiRouter(): Router {
     const all = await listBooks(user.id, guild?.id ?? null);
     // Locked / out-of-window books stay invisible to players; their teacher
     // (or owner) still sees them so they can unlock or remove them.
-    const books = all.filter((b) => isBookPlayable(b) || canManageBook(user, b));
+    const books: BookRow[] = [];
+    for (const b of all) {
+      if (isBookPlayable(b) || (await canManageBook(user, b))) books.push(b);
+    }
     // Attach the tome's total challenge count so the dashboard can flag the
     // "no monsters" state (generation failed) instead of a mysterious empty
     // quest on the map.
@@ -1018,9 +1223,8 @@ export function createApiRouter(): Router {
     const book = await getBook(String(req.params.id));
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
-    const allowed = book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId);
-    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
-    if (!isBookPlayable(book) && !canManageBook(user!, book)) {
+    if (!user || !(await canViewBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
+    if (!isBookPlayable(book) && !(await canManageBook(user, book))) {
       return res.status(423).json({ error: bookLockedMessage(book) });
     }
     const chapters = await getChapters(book.id);
@@ -1039,9 +1243,8 @@ export function createApiRouter(): Router {
     }
     const book = await getBook(chapter.bookId);
     const user = await getUserById(req.user!.id);
-    const allowed = book && (book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId));
-    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
-    if (book && !isBookPlayable(book) && !canManageBook(user!, book)) {
+    if (!book || !user || !(await canViewBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
+    if (!isBookPlayable(book) && !(await canManageBook(user, book))) {
       return res.status(423).json({ error: bookLockedMessage(book) });
     }
 
@@ -1071,9 +1274,8 @@ export function createApiRouter(): Router {
     }
     const book = await getBook(chapter.bookId);
     const user = await getUserById(req.user!.id);
-    const allowed = book && (book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId));
-    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
-    if (book && !isBookPlayable(book) && !canManageBook(user!, book)) {
+    if (!book || !user || !(await canViewBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
+    if (!isBookPlayable(book) && !(await canManageBook(user, book))) {
       return res.status(423).json({ error: bookLockedMessage(book) });
     }
     res.json(buildLessonOverview(chapter));
@@ -1088,7 +1290,7 @@ export function createApiRouter(): Router {
     const book = await getBook(String(req.params.id));
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
-    if (!user || !canManageBook(user, book)) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
     await deleteBook(book.id);
     res.json({ ok: true, title: book.title });
   });
@@ -1103,7 +1305,7 @@ export function createApiRouter(): Router {
     const book = await getBook(String(req.params.id));
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
-    if (!user || !canManageBook(user, book)) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const body = req.body ?? {};
     const locked = typeof body.locked === 'boolean' ? body.locked : book.locked;
@@ -1130,9 +1332,7 @@ export function createApiRouter(): Router {
     const book = await getBook(bookId);
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
-    const isOwner = book.ownerId === user?.id;
-    const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const term = typeof req.body?.term === 'string' && TERMS.includes(req.body.term as any) ? req.body.term : 'prelims';
     const guild = book.guildId ? await getGuild(book.guildId) : null;
@@ -1165,7 +1365,7 @@ export function createApiRouter(): Router {
     const chapter = await getChapter(chapterId);
     if (!chapter || chapter.bookId !== bookId) return res.status(404).json({ error: 'Chapter not found' });
     const user = await getUserById(req.user!.id);
-    if (!user || !canManageBook(user, book)) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const term = typeof req.body?.term === 'string' && TERMS.includes(req.body.term as any) ? req.body.term : 'prelims';
     const guild = book.guildId ? await getGuild(book.guildId) : null;
@@ -1184,20 +1384,19 @@ export function createApiRouter(): Router {
 
   /**
    * Per-book quest settings. Today: questCount (challenges this PDF yields;
-   * null clears the override back to "auto") and quizMode ('general' or
-   * 'programming' — the teacher override for filename detection). Editing
-   * here does NOT regenerate; changes apply on the next (re)generation.
+   * null clears the override back to "auto"), quizMode ('general' or
+   * 'programming' — the teacher override for filename detection), mapMode and
+   * gameMode (how students PLAY it: classic | survival | speedrun | boss).
+   * Editing here does NOT regenerate; changes apply on the next (re)generation.
    */
   router.put('/books/:id/settings', requireAuth, async (req, res) => {
     const bookId = String(req.params.id);
     const book = await getBook(bookId);
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
-    const isOwner = book.ownerId === user?.id;
-    const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
-    if (req.body?.questCount !== undefined || req.body?.questChapters !== undefined || req.body?.quizMode !== undefined || req.body?.mapMode !== undefined) {
+    if (req.body?.questCount !== undefined || req.body?.questChapters !== undefined || req.body?.quizMode !== undefined || req.body?.mapMode !== undefined || req.body?.gameMode !== undefined) {
       let updated = book;
       if (req.body?.questCount !== undefined) {
         updated = await updateBookQuestCount(bookId, clampTargetCount(req.body.questCount)) ?? book;
@@ -1221,10 +1420,17 @@ export function createApiRouter(): Router {
         await setMapMode(bookId, mode);
         updated = (await getBook(bookId)) ?? book;
       }
+      if (req.body?.gameMode !== undefined) {
+        // Allowlist — an unknown mode is a client error, never a silent fallback.
+        if (!isGameMode(req.body.gameMode)) {
+          return res.status(400).json({ error: `gameMode must be one of: ${GAME_MODES.join(', ')}` });
+        }
+        updated = await updateBookGameMode(bookId, req.body.gameMode) ?? book;
+      }
       if (!updated) return res.status(500).json({ error: 'Could not save quest settings' });
-      return res.json({ bookId, questCount: updated.questCount, questChapters: updated.questChapters, quizMode: updated.quizMode, mapMode: updated.mapMode });
+      return res.json({ bookId, questCount: updated.questCount, questChapters: updated.questChapters, quizMode: updated.quizMode, mapMode: updated.mapMode, gameMode: updated.gameMode });
     }
-    res.json({ bookId, questCount: book.questCount, questChapters: book.questChapters, quizMode: book.quizMode, mapMode: book.mapMode });
+    res.json({ bookId, questCount: book.questCount, questChapters: book.questChapters, quizMode: book.quizMode, mapMode: book.mapMode, gameMode: book.gameMode });
   });
 
   // --- teacher: review / regenerate individual challenges ------------------------
@@ -1257,9 +1463,7 @@ export function createApiRouter(): Router {
     const book = await getBook(challenge.bookId);
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
-    const isOwner = book.ownerId === user?.id;
-    const isGuildTeacher = book.guildId && (user?.role === 'teacher' || user?.role === 'admin') && user?.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const chapter = await getChapter(challenge.chapterId);
     if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
@@ -1314,9 +1518,7 @@ export function createApiRouter(): Router {
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
     if (!user) return res.status(401).json({ error: 'User not found' });
-    const isOwner = book.ownerId === user.id;
-    const isGuildTeacher = book.guildId && (user.role === 'teacher' || user.role === 'admin') && user.guildId === book.guildId;
-    if (!isOwner && !isGuildTeacher) return res.status(403).json({ error: 'Not allowed' });
+    if (!(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
 
     const b = req.body ?? {};
     let questLimit: number | null = null;
@@ -1393,9 +1595,15 @@ export function createApiRouter(): Router {
     const guild = await resolveUserGuild(user);
     const ts = resolveTermSettings(opts.term, guild?.termSettings ?? null);
     const weights: ScoreWeights = ts.scoreWeights ?? DEFAULT_SCORE_WEIGHTS;
-    // The tithe's recipient: the teacher who leads the student's guild. Resolved
-    // once here so the transaction below stays a straight-line read-modify-write.
-    const teacherId = guild?.teacherId ?? null;
+    // The mode the tome was played in rides on the book (never on the request),
+    // so a client cannot claim a speedrun bonus its teacher never chose.
+    const book = await getBook(chapter.bookId);
+    const gameMode = book?.gameMode ?? 'classic';
+    // The tithe's recipient: the professor who OWNS the completed book when they
+    // still teach in the student's guild; otherwise the guild owner (exactly the
+    // old behaviour, and the fallback for ownerless books). Resolved once here so
+    // the transaction below stays a straight-line read-modify-write.
+    const teacherId = await resolveTitheRecipient(guild, book);
 
     // The existing scoring formula, unchanged — the fail path feeds it a
     // not-finished (and out-of-life) run so its own penalties apply.
@@ -1403,7 +1611,10 @@ export function createApiRouter(): Router {
       { mistakes: opts.mistakes, timeSeconds: opts.timeSeconds, finished: opts.finished, livesRemaining: opts.livesRemaining, outOfLife: opts.failReason === 'out_of_lives' },
       weights,
     );
-    const scaled = Math.round(result.rawScore * (ts.pointsMultiplier ?? 1));
+    // Speedrun's clock bonus is the ONLY mode-driven scoring change; every other
+    // mode (classic included) adds zero here and keeps today's score exactly.
+    const modeBonus = gameModeTimeBonus(gameMode, opts.timeSeconds, ts.timeLimitSeconds, opts.failReason === null);
+    const scaled = Math.round(result.rawScore * (ts.pointsMultiplier ?? 1)) + modeBonus;
 
     let coinsAwarded: number;
     let coinsPenalty = 0;
@@ -1473,7 +1684,7 @@ export function createApiRouter(): Router {
       userId: user.id, chapterId: chapter.id, term: opts.term,
       outcome: opts.failReason ?? 'completed', score: scaled,
       coinsGathered: opts.coinsGathered, coinsPenalty, netCoins, balance: newCoins,
-      teacherId, teacherTithe,
+      teacherId, teacherTithe, gameMode, modeBonus,
     }));
 
     return {
@@ -1483,7 +1694,9 @@ export function createApiRouter(): Router {
       coinsPenalty,
       netCoins,
       coins: newCoins,
-      breakdown: result.breakdown,
+      breakdown: modeBonus > 0
+        ? [...result.breakdown, { label: `${gameModeLabel(gameMode)} time bonus`, value: modeBonus }]
+        : result.breakdown,
       rank: rankForScore(await getTermScore(user.id, opts.term)),
       term: opts.term,
       streak,

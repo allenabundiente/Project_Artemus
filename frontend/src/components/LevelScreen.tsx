@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AvatarPrefs, ScoreResultResponse, Term } from '../types';
+import type { AvatarPrefs, GameMode, ScoreResultResponse, Term } from '../types';
 import * as api from '../api';
 import { ArcadeEngine, buildLayout, BACKING_W, BACKING_H } from '../game/engine';
 import { loadSprites, spriteDataUrl } from '../game/sprites';
 import { packAssetsOnce } from '../game/packAvatar';
 import { getAnimations, loadExtraSprites } from '../game/animations';
 import { dealQuestPlan, type QuestPlan } from '../game/questPlan';
+import { gameModeLabel, gameModeRules, pickBossQueue, resolveGameMode } from '../game/gameModes';
 import { sfx } from '../game/sfx';
 import { loadCustomThemes, resolveTheme } from '../game/themes';
 import BattleScreen from './BattleScreen';
@@ -17,6 +18,8 @@ interface Props {
   chapterId: string;
   chapterIdx: number;
   term: Term;
+  /** How this tome is played — the teacher's per-book choice ('classic' by default). */
+  gameMode?: GameMode;
   avatar?: AvatarPrefs;
   onExit: () => void;
   onComplete: (chapterId: string, result: ScoreResultResponse) => void;
@@ -33,7 +36,7 @@ interface FailOutcome {
   coinsGathered: number;
 }
 
-export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avatar, onExit, onComplete, onFailSettled }: Props) {
+export default function LevelScreen({ bookId, chapterId, chapterIdx, term, gameMode, avatar, onExit, onComplete, onFailSettled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<ArcadeEngine | null>(null);
   /** Per-run dealt plan: distinct challenge per heart + the boss repeat queue. */
@@ -57,6 +60,10 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   const [streak, setStreak] = useState(0);
   const [coinsRun, setCoinsRun] = useState(0);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  /** The active mode (shown in the HUD; 'classic' renders no extra badge). */
+  const [mode, setMode] = useState<GameMode>(resolveGameMode(gameMode));
+  /** Survival runs without a clock at all. */
+  const [noClock, setNoClock] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   // Synchronous submit latch: React state (`submitting`) lags a render, so a
@@ -64,7 +71,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
   const submittingRef = useRef(false);
   const [failOutcome, setFailOutcome] = useState<FailOutcome | null>(null);
   const [failError, setFailError] = useState<string | null>(null);
-  const termSettingsRef = useRef<{ timeLimitSeconds: number } | null>(null);
+  const termSettingsRef = useRef<{ timeLimitSeconds: number | null } | null>(null);
   /** Sprite slot of the monster the player is currently battling. */
   const fightingSlotRef = useRef<string>('enemy_goblin');
   // Touch devices (phones/tablets) get the on-screen D-pad; desktops with a
@@ -89,7 +96,13 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
           setError('This quest has no monsters yet. Ask your guild master to regenerate the tome.');
           return;
         }
-        termSettingsRef.current = { timeLimitSeconds: termInfo.settings.timeLimitSeconds };
+        // Mode rules (one place for all four modes): survival drops the clock,
+        // speedrun tightens it, boss rebuilds the gate. Classic changes nothing.
+        const activeMode = resolveGameMode(gameMode);
+        const rules = gameModeRules(activeMode, termInfo.settings.timeLimitSeconds);
+        setMode(activeMode);
+        setNoClock(rules.timeLimitSeconds === null);
+        termSettingsRef.current = { timeLimitSeconds: rules.timeLimitSeconds };
         // Deal the run: every monster gets DISTINCT challenges (no repeats
         // within this quest), sized by the guild's difficulty setting. Higher
         // difficulty → fewer but tougher (multi-heart) monsters, and every
@@ -97,6 +110,9 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         // student will already have faced during this run.
         const seed = Math.floor(Math.random() * 0x7fffffff);
         const plan = dealQuestPlan(challenges, termInfo.settings.monsterDifficulty, seed);
+        // Boss Rush: a real boss built from the chapter's HARDEST questions,
+        // instead of the classic gate re-asking what the run already faced.
+        if (rules.bossFromHardest) plan.bossQueue = pickBossQueue(challenges);
         planRef.current = plan;
         const sprites = await loadSprites();
         // Asset pack for the buyable pack-character skins (best-effort).
@@ -155,7 +171,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         animations);
         engineRef.current = engine;
         fightingSlotRef.current = 'enemy_goblin';
-        setTimeLeft(termInfo.settings.timeLimitSeconds);
+        setTimeLeft(rules.timeLimitSeconds);
         setPhase('playing');
         engine.start();
         // Dev/testing aid: inspect live game state from the console.
@@ -173,7 +189,7 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
       cancelled = true;
       engineRef.current?.stop();
     };
-  }, [bookId, chapterId, chapterIdx, term]);
+  }, [bookId, chapterId, chapterIdx, term, gameMode]);
 
   // --- countdown timer ---------------------------------------------------------
   const finishQuest = useCallback(
@@ -330,6 +346,19 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
     <div className="level-screen" style={{ maxWidth: 960, margin: '0 auto' }}>
       <div className="hud" style={{ marginBottom: '0.75rem', flexWrap: 'wrap' }}>
         <span className="label">QUEST {chapterIdx + 1}</span>
+        {mode !== 'classic' && (
+          <span
+            className="pixel-font"
+            style={{ fontSize: '0.55rem', color: 'var(--p-yellow)' }}
+            title={mode === 'survival'
+              ? 'No clock — only your lives matter'
+              : mode === 'boss'
+                ? 'Each chapter ends with a boss built from its hardest questions'
+                : 'A tight countdown; spare time pays a score bonus'}
+          >
+            {gameModeLabel(mode).toUpperCase()}
+          </span>
+        )}
         <span style={{ display: 'flex', alignItems: 'center' }}>
           {Array.from({ length: 3 }, (_, i) => (
             <img
@@ -350,9 +379,13 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, avata
         <span>
           <span className="label">STREAK:</span> {streak}
         </span>
-        <span className={timeCritical ? 'blink' : ''} style={{ color: timeCritical ? 'var(--d-rose)' : 'var(--d-gold)' }}>
-          ⏳ {mm}:{ss}
-        </span>
+        {noClock ? (
+          <span style={{ color: 'var(--d-gold)' }} title="No clock — only your lives matter">⏳ ∞</span>
+        ) : (
+          <span className={timeCritical ? 'blink' : ''} style={{ color: timeCritical ? 'var(--d-rose)' : 'var(--d-gold)' }}>
+            ⏳ {mm}:{ss}
+          </span>
+        )}
         <button
           className="pixel-btn pixel-btn--ghost"
           onClick={() => sfx.toggle()}

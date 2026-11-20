@@ -32,6 +32,8 @@ export interface BookMeta {
   quizMode: QuizMode;
   /** How chapters render: 'classic' side-scroll or 'topdown' dungeon crawler. */
   mapMode?: 'classic' | 'topdown';
+  /** How students PLAY the tome: classic | survival | speedrun | boss. */
+  gameMode?: GameMode;
   createdAt: string;
   /** Teacher-set quest cap; null/undefined = unlimited. */
   questLimit?: number | null;
@@ -115,6 +117,12 @@ export interface Progress {
 }
 
 export type QuizMode = 'general' | 'programming' | 'language';
+
+/**
+ * How a tome is played. 'classic' is today's game; each other mode adds one
+ * rule (see frontend/src/game/gameModes.ts and backend/src/services/gameModes.ts).
+ */
+export type GameMode = 'classic' | 'survival' | 'speedrun' | 'boss';
 
 export interface UploadResult {
   bookId: string;
@@ -290,6 +298,26 @@ export interface GuildInfo {
   name: string;
   passcode?: string;
   termSettings?: Record<string, unknown>;
+  /** Teaching staff: the owner first, then every professor. */
+  professors?: GuildProfessor[];
+  /** Owner-only teacher invite code (null for professors/students). */
+  professorPasscode?: string | null;
+  /** The signed-in teacher's role in this guild (teachers only). */
+  role?: GuildTeacherRole | null;
+}
+
+export type GuildTeacherRole = 'owner' | 'professor';
+
+export interface GuildProfessor {
+  id: string;
+  name: string;
+  role: GuildTeacherRole;
+}
+
+/** One professor's classes on the guild page. */
+export interface GuildClassGroup {
+  professor: { id: string; name: string };
+  books: BookMeta[];
 }
 
 /** Admin directory row: every guild with its leader, code, and size. */

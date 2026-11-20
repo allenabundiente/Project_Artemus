@@ -1,7 +1,7 @@
 import type {
   AdminAccount, AuditEntry, AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, DungeonFetchResult, DungeonMap,
-  FeatureRow, GenerateResult, GuildAdminInfo, GuildInfo, LeaderboardResponse, LessonOverview, LlmStatus, MapConfig, MapResolve,
-  Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
+  FeatureRow, GameMode, GenerateResult, GuildAdminInfo, GuildClassGroup, GuildInfo, GuildProfessor, LeaderboardResponse, LessonOverview, LlmStatus,
+  MapConfig, MapResolve, Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
 } from './types';
 
@@ -86,8 +86,38 @@ export async function createGuild(name: string): Promise<{ guild: GuildInfo }> {
   return send<{ guild: GuildInfo }>('/api/guilds', 'POST', { name });
 }
 
-export async function getMyGuild(): Promise<{ guild: (GuildInfo & { termSettings: Record<string, unknown> }) | null; roster?: RosterEntry[] }> {
+export async function getMyGuild(): Promise<{
+  guild: (GuildInfo & { termSettings: Record<string, unknown> }) | null;
+  roster?: RosterEntry[];
+  professors?: GuildProfessor[];
+  role?: GuildInfo['role'];
+}> {
   return get('/api/guilds/mine');
+}
+
+/** The guild's teaching staff (owner + professors). */
+export async function getProfessors(): Promise<{ professors: GuildProfessor[]; professorPasscode: string | null }> {
+  return get('/api/guilds/mine/professors');
+}
+
+/** The guild's books grouped by the professor who uploaded them. */
+export async function getGuildClasses(): Promise<GuildClassGroup[]> {
+  return get<GuildClassGroup[]>('/api/guilds/mine/classes');
+}
+
+/** A teacher joins an existing guild with its professor code. */
+export async function joinGuildAsProfessor(professorPasscode: string): Promise<{ guild: GuildInfo; role: 'professor' }> {
+  return send('/api/guilds/join-as-professor', 'POST', { professorPasscode });
+}
+
+/** Owner only: mint a fresh professor invite code. */
+export async function regenerateProfessorPasscode(): Promise<{ professorPasscode: string | null }> {
+  return send('/api/guilds/mine/professor-passcode', 'POST');
+}
+
+/** Owner only: remove a professor (their books stay in the guild). */
+export async function removeProfessor(userId: string): Promise<{ removed: { id: string; name: string } }> {
+  return send(`/api/guilds/mine/professors/${userId}`, 'DELETE');
 }
 
 export async function getRoster(): Promise<{ roster: RosterEntry[] }> {
@@ -356,6 +386,9 @@ export async function setBookQuestCount(bookId: string, questCount: number | nul
  * (Legacy no-op wipe — regeneration now replaces per chapter in one call
  * via generateChallenges, which also reports what it did.)
  */
+export async function setBookGameMode(bookId: string, gameMode: GameMode): Promise<{ bookId: string; gameMode: GameMode }> {
+  return send(`/api/books/${bookId}/settings`, 'PUT', { gameMode });
+}
 export async function regenerateBook(bookId: string): Promise<{ ok: boolean; challengeCount?: number; note?: string }> {
   return send(`/api/books/${bookId}/regenerate`, 'POST');
 }

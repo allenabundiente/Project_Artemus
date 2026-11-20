@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../api';
-import type { AuthUser, BookChallengeReview, BookMeta, ChapterMeta, QuizMode, RosterEntry, Term, TermSettings } from '../types';
+import type { AuthUser, BookChallengeReview, BookMeta, ChapterMeta, GameMode, GuildInfo, GuildProfessor, QuizMode, RosterEntry, Term, TermSettings } from '../types';
+import { GAME_MODE_OPTIONS, gameModeLabel } from '../game/gameModes';
 import BookRulesRow from './BookRulesRow';
 import GuildSettings from './GuildSettings';
 import Leaderboard from './Leaderboard';
@@ -16,7 +17,7 @@ import DungeonMapEditor from './DungeonMapEditor';
 
 interface Props {
   user: AuthUser;
-  guild: { id: string; name: string; passcode?: string } | null;
+  guild: GuildInfo | null;
   onRefreshUser: () => Promise<void>;
   onSignOut: () => void;
 }
@@ -31,6 +32,15 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
   const [editBook, setEditBook] = useState<string | null>(null);
   const [guildName, setGuildName] = useState('');
   const [passcode, setPasscode] = useState(guild?.passcode ?? '');
+  /** Teaching staff (owner first) and the owner-only professor invite code. */
+  const [professors, setProfessors] = useState<GuildProfessor[]>([]);
+  const [professorPasscode, setProfessorPasscode] = useState('');
+  /** The signed-in teacher's role in this guild ('owner' | 'professor' | null). */
+  const [myRole, setMyRole] = useState<'owner' | 'professor' | null>(guild?.role ?? null);
+  /** Professor code typed on the “join a guild” card. */
+  const [joinCode, setJoinCode] = useState('');
+  /** Collapsed professor sections on the ASSIGNED TOMES list. */
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [books, setBooks] = useState<BookMeta[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -67,6 +77,13 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       if (mine.guild) {
         setPasscode(mine.guild.passcode ?? '');
         setRoster(mine.roster ?? []);
+        setProfessors(mine.guild.professors ?? mine.professors ?? []);
+        setProfessorPasscode(mine.guild.professorPasscode ?? '');
+        setMyRole(mine.guild.role ?? mine.role ?? null);
+      } else {
+        setProfessors([]);
+        setProfessorPasscode('');
+        setMyRole(null);
       }
       setBooks(await api.listBooks());
     } catch (e) {
@@ -104,6 +121,66 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
       api.refreshApp();
     } catch (e) {
       setError((e as Error).message);
+    }
+  }
+
+  /** Owner: mint a fresh professor invite code. */
+  async function handleRegenerateProfessorPasscode() {
+    if (!window.confirm('Regenerate the professor code? The old one stops working immediately.')) return;
+    try {
+      const res = await api.regenerateProfessorPasscode();
+      setProfessorPasscode(res.professorPasscode ?? '');
+      setNotice(`New professor code: ${res.professorPasscode}`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  /** Owner: remove a professor — their classes stay in the guild. */
+  async function handleRemoveProfessor(p: GuildProfessor) {
+    if (!window.confirm(`Remove ${p.name} as a professor? Their classes stay in the guild.`)) return;
+    setError(null);
+    setBusy(`Removing ${p.name}…`);
+    try {
+      await api.removeProfessor(p.id);
+      setNotice(`${p.name} no longer teaches in this guild.`);
+      await refreshGuildData();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Teacher onboarding: join an existing guild with its professor code. */
+  async function handleJoinAsProfessor() {
+    setError(null);
+    setBusy('Seeking the guild…');
+    try {
+      const res = await api.joinGuildAsProfessor(joinCode);
+      setNotice(`You now teach in "${res.guild.name}". Upload your own classes below.`);
+      setJoinCode('');
+      await onRefreshUser();
+      api.refreshApp();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** How students PLAY this tome: classic | survival | speedrun | boss. */
+  async function handleBookGameMode(book: BookMeta, mode: GameMode) {
+    setError(null);
+    setBusy(`Setting "${book.title}" to ${gameModeLabel(mode)}…`);
+    try {
+      await api.setBookGameMode(book.id, mode);
+      setNotice(`"${book.title}" is now played in ${gameModeLabel(mode)} mode.`);
+      await refreshGuildData();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -306,6 +383,28 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+  /**
+   * ASSIGNED TOMES grouped by the professor who uploaded each class. Books
+   * whose uploader is not (or no longer) a professor of this guild — and books
+   * with no owner — group under the guild owner, so nothing can go missing.
+   */
+  const ownerEntry = professors.find((p) => p.role === 'owner');
+  const staffIds = new Set(professors.map((p) => p.id));
+  const ownerGroupId = ownerEntry?.id ?? guild?.id ?? user.id;
+  const bookGroups: { id: string; name: string; isMe: boolean; books: BookMeta[] }[] = [];
+  const ensureGroup = (id: string, name: string) => {
+    if (!bookGroups.some((g) => g.id === id)) bookGroups.push({ id, name, isMe: id === user.id, books: [] });
+  };
+  if (professors.length > 0) {
+    for (const p of professors) ensureGroup(p.id, p.name);
+  } else {
+    ensureGroup(user.id, user.name);
+  }
+  for (const b of books) {
+    const key = b.ownerId && staffIds.has(b.ownerId) ? b.ownerId : ownerGroupId;
+    const group = bookGroups.find((g) => g.id === key) ?? bookGroups[0];
+    group.books.push(b);
+  }
 
   return (
     <div style={{ minHeight: '100vh', padding: '1.5rem', position: 'relative' }}>
@@ -313,7 +412,9 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
         <div className="hud">
           <AvatarSprite avatar={user.avatar ?? DEFAULT_AVATAR} size={28} title={`${user.name}'s heraldic avatar`} />
           <span>🏰 {user.name}</span>
-          {guild && <span className="label">GUILD MASTER of {guild.name}</span>}
+          {guild && (
+            <span className="label">{myRole === 'professor' ? 'PROFESSOR of' : 'GUILD MASTER of'} {guild.name}</span>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {view !== 'home' && <button className="pixel-btn pixel-btn--ghost" onClick={() => setView('home')}>◀ HALL</button>}
@@ -348,6 +449,29 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
             </div>
           )}
 
+          {!guild && (
+            <div className="pixel-panel" style={{ maxWidth: 520, margin: '0 auto 1.25rem' }}>
+              <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>JOIN A GUILD AS PROFESSOR</p>
+              <p className="term-font" style={{ color: 'var(--d-stone-light)' }}>
+                Got a professor code from a guild owner? Join their guild and upload your own classes.
+              </p>
+              <input
+                className="pixel-input"
+                placeholder="PROFESSOR CODE"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                style={{ marginBottom: '0.6rem' }}
+              />
+              <button
+                className="pixel-btn pixel-btn--gold"
+                onClick={() => void handleJoinAsProfessor()}
+                disabled={!!busy || joinCode.trim().length < 6}
+              >
+                {busy ?? 'JOIN AS PROFESSOR'}
+              </button>
+            </div>
+          )}
+
           {guild && (
             <>
               <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
@@ -356,16 +480,69 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                   Guild code: <strong style={{ color: 'var(--d-gold)', fontSize: '1.5rem', letterSpacing: '0.2em' }}>{passcode}</strong>
                 </p>
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                  <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem' }} onClick={handleRegeneratePasscode}>
-                    REGENERATE GUILD CODE
-                  </button>
-                  <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.6rem' }} onClick={() => setView('settings')}>
-                    ⚙ GUILD SETTINGS
-                  </button>
+                  {/* Guild-wide codes and term settings are the OWNER's alone; */}
+                  {/* professors keep the day-to-day teacher tools below. */}
+                  {myRole !== 'professor' && (
+                    <>
+                      <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem' }} onClick={handleRegeneratePasscode}>
+                        REGENERATE GUILD CODE
+                      </button>
+                      <button className="pixel-btn pixel-btn--gold" style={{ fontSize: '0.6rem' }} onClick={() => setView('settings')}>
+                        ⚙ GUILD SETTINGS
+                      </button>
+                    </>
+                  )}
                   <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.6rem' }} onClick={() => setView('leaderboard')}>
                     ⚔ LEADERBOARD
                   </button>
                 </div>
+              </div>
+
+              <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
+                <p className="pixel-font" style={{ fontSize: '0.8rem', marginTop: 0 }}>👩‍🏫 PROFESSORS ({professors.length})</p>
+                {professors.length === 0 && (
+                  <p className="status-text" style={{ margin: 0 }}>Only you teach in this guild.</p>
+                )}
+                {professors.map((p) => (
+                  <div key={p.id} className="leaderboard-row">
+                    <span className="term-font" style={{ fontSize: '1.1rem', flex: 1 }}>
+                      {p.name}{p.id === user.id ? ' (you)' : ''}
+                    </span>
+                    <span className="pixel-font" style={{ fontSize: '0.55rem', color: 'var(--d-stone-light)' }}>
+                      {p.role === 'owner' ? 'OWNER' : 'PROFESSOR'}
+                    </span>
+                    {myRole === 'owner' && p.role !== 'owner' && (
+                      <button
+                        className="pixel-btn pixel-btn--ghost"
+                        style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                        title="Remove this professor (their classes stay in the guild)"
+                        onClick={() => void handleRemoveProfessor(p)}
+                        disabled={!!busy}
+                      >
+                        ✖ REMOVE
+                      </button>
+                    )}
+                  </div>
+                ))}
+                {myRole === 'owner' && (
+                  <>
+                    <p className="term-font" style={{ fontSize: '1.05rem', margin: '0.7rem 0 0.2rem' }}>
+                      Professor code:{' '}
+                      <strong style={{ color: 'var(--d-gold)', letterSpacing: '0.15em' }}>{professorPasscode || '…'}</strong>
+                    </p>
+                    <p className="term-font" style={{ fontSize: '0.85rem', color: 'var(--d-stone-light)', margin: '0 0 0.5rem' }}>
+                      Teachers enter this in “Join a guild as professor”. Students cannot use it.
+                    </p>
+                    <button
+                      className="pixel-btn pixel-btn--ghost"
+                      style={{ fontSize: '0.6rem' }}
+                      onClick={() => void handleRegenerateProfessorPasscode()}
+                      disabled={!!busy}
+                    >
+                      REGENERATE PROFESSOR CODE
+                    </button>
+                  </>
+                )}
               </div>
 
               <div className="pixel-panel" style={{ maxWidth: 640, margin: '0 auto 1.25rem' }}>
@@ -469,8 +646,34 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                   Cap how many quests each PDF yields and schedule when it opens — students see locks on their realm map.
                 </p>
                 {books.length === 0 && <p className="status-text" style={{ margin: 0 }}>No tomes assigned yet.</p>}
+                {bookGroups.map((group) => {
+                  const open = !collapsedGroups[group.id];
+                  return (
+                    <div
+                      key={group.id}
+                      style={{
+                        marginBottom: '0.6rem',
+                        paddingLeft: '0.4rem',
+                        // The signed-in teacher's own classes are highlighted.
+                        borderLeft: group.isMe ? '3px solid var(--d-gold)' : '3px solid transparent',
+                      }}
+                    >
+                      <button
+                        className="pixel-btn pixel-btn--ghost"
+                        style={{ width: '100%', textAlign: 'left', textTransform: 'none', fontSize: '0.85rem' }}
+                        onClick={() => setCollapsedGroups((m) => ({ ...m, [group.id]: !m[group.id] }))}
+                        title={`${group.name}'s classes`}
+                      >
+                        {open ? '▾' : '▸'} 👩‍🏫 {group.name}{group.isMe ? ' (you)' : ''} — {group.books.length} class{group.books.length === 1 ? '' : 'es'}
+                      </button>
+                      {open && group.books.length === 0 && (
+                        <p className="term-font" style={{ margin: '0.2rem 0 0 1rem', color: 'var(--d-stone-light)', fontSize: '0.95rem' }}>
+                          No classes from this professor yet.
+                        </p>
+                      )}
+                      {open && (
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                  {books.map((b) => {
+                  {group.books.map((b) => {
                     const expanded = !!expandedBooks[b.id];
                     return (
                       <li key={b.id} className="term-font" style={{ fontSize: '1.1rem', marginBottom: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.5rem' }}>
@@ -493,6 +696,11 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                           )}
                           {b.challengeCount === 0 && (
                             <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-red)' }} title="No monsters — press ⟳ to regenerate">⚠ 0</span>
+                          )}
+                          {b.gameMode && b.gameMode !== 'classic' && (
+                            <span className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--p-yellow)' }} title={`Game mode: ${gameModeLabel(b.gameMode)}`}>
+                              🎮
+                            </span>
                           )}
                         </div>
                         {expanded && (
@@ -526,6 +734,18 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                             <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={() => void handleBookMode(b)} title="Toggle quiz mode">
                               {b.quizMode === 'programming' ? '⌨→📖' : '📖→⌨'}
                             </button>
+                            <select
+                              className="pixel-select"
+                              style={{ fontSize: '0.55rem' }}
+                              value={b.gameMode ?? 'classic'}
+                              title="How students play this tome"
+                              onChange={(e) => void handleBookGameMode(b, e.target.value as GameMode)}
+                              disabled={!!busy}
+                            >
+                              {GAME_MODE_OPTIONS.map((o) => (
+                                <option key={o.id} value={o.id}>🎮 {o.label.toUpperCase()}</option>
+                              ))}
+                            </select>
                             <button className="pixel-btn pixel-btn--ghost" style={{ fontSize: '0.5rem' }} onClick={() => { setReviewBook(b.id); setView('review'); }}>🔍</button>
                             <button className={`pixel-btn ${b.locked ? 'pixel-btn--gold' : 'pixel-btn--ghost'}`} style={{ fontSize: '0.5rem' }} onClick={() => void handleBookLock(b)}>
                               {b.locked ? '🔓' : '🔒'}
@@ -545,6 +765,10 @@ export default function TeacherDashboard({ user, guild, onRefreshUser, onSignOut
                     );
                   })}
                 </ul>
+                      )}
+                    </div>
+                  );
+                })}
                 <p className="pixel-font" style={{ fontSize: '0.55rem', margin: '0.75rem 0 0.35rem', color: 'var(--d-stone-light)' }}>⚔ RE-SUMMON A SINGLE CHAPTER (schedule edits live in each tome's rules row)</p>
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                   {books.map((b) => {

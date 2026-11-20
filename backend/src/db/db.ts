@@ -8,6 +8,7 @@ import pg from 'pg';
 import type { CodeBlock, ChallengeRow, ChapterRow, ProgressRow, CompiledLesson } from './types.js';
 import type { BookMapMode } from './dungeon.js';
 import { sanitizeAvatar } from './admin.js';
+import { resolveGameMode, type GameMode } from '../services/gameModes.js';
 
 export { type CodeBlock, type ChallengeRow, type ChapterRow, type ProgressRow, type CompiledLesson, type QuestBlank } from './types.js';
 export {
@@ -121,6 +122,8 @@ export interface BookRow {
   questLimit: number | null;
   /** How chapters render: 'classic' side-scroll or 'topdown' dungeon crawler. */
   mapMode: BookMapMode;
+  /** How students PLAY the tome: classic | survival | speedrun | boss. */
+  gameMode: GameMode;
   createdAt: Date;
 }
 
@@ -135,6 +138,9 @@ function mapBook(r: any): BookRow {
     questChapters: r.quest_chapters ?? null,
     questLimit: r.quest_limit ?? null,
     mapMode: r.map_mode === 'topdown' ? 'topdown' : 'classic',
+    // Unknown/absent column values (a DB that has not run 0017 yet) mean
+    // 'classic' — the historic gameplay, never a surprise mode.
+    gameMode: resolveGameMode(r.game_mode),
     createdAt: r.created_at,
   };
 }
@@ -174,7 +180,10 @@ export interface GuildRow {
   id: string;
   name: string;
   passcode: string;
+  /** The guild OWNER (still the founding teacher). */
   teacherId: string;
+  /** Teacher invite code — separate from the student passcode (null until generated). */
+  professorPasscode: string | null;
   termSettings: Record<string, unknown>;
   /** Optional per-guild map skin ({ theme }) — set by the teacher. */
   mapSettings: Record<string, unknown>;
@@ -182,7 +191,11 @@ export interface GuildRow {
 }
 
 function mapGuild(r: any): GuildRow {
-  return { id: r.id, name: r.name, passcode: r.passcode, teacherId: r.teacher_id, termSettings: r.term_settings ?? {}, mapSettings: r.map_settings ?? {}, createdAt: r.created_at };
+  return {
+    id: r.id, name: r.name, passcode: r.passcode, teacherId: r.teacher_id,
+    professorPasscode: r.professor_passcode ?? null,
+    termSettings: r.term_settings ?? {}, mapSettings: r.map_settings ?? {}, createdAt: r.created_at,
+  };
 }
 
 export interface ScoreRow {
@@ -257,6 +270,12 @@ export async function updateBookQuizMode(bookId: string, quizMode: QuizMode): Pr
   return row ? mapBook(row) : null;
 }
 
+/** Set the per-book game mode (classic | survival | speedrun | boss). */
+export async function updateBookGameMode(bookId: string, gameMode: GameMode): Promise<BookRow | null> {
+  const row = await queryOne(`UPDATE books SET game_mode = $2 WHERE id = $1 RETURNING *`, [bookId, resolveGameMode(gameMode)]);
+  return row ? mapBook(row) : null;
+}
+
 /** Set (or clear) the per-book challenge count a teacher asked for. */
 export async function updateBookQuestCount(bookId: string, questCount: number | null): Promise<BookRow | null> {
   const row = await queryOne(`UPDATE books SET quest_count = $2 WHERE id = $1 RETURNING *`, [bookId, questCount]);
@@ -307,6 +326,22 @@ export async function listBooks(ownerId: string | null, guildId: string | null):
 export async function getBook(id: string): Promise<BookRow | null> {
   const row = await queryOne(`SELECT * FROM books WHERE id = $1`, [id]);
   return row ? mapBook(row) : null;
+}
+
+/** One guild's books with their uploader's name (the professor-grouped view). */
+export interface GuildBookRow extends BookRow {
+  ownerName: string | null;
+}
+
+export async function listGuildBooks(guildId: string): Promise<GuildBookRow[]> {
+  const rows = await query(
+    `SELECT b.*, u.name AS owner_name
+     FROM books b LEFT JOIN users u ON u.id = b.owner_id
+     WHERE b.guild_id = $1
+     ORDER BY b.created_at DESC`,
+    [guildId],
+  );
+  return rows.map((r) => ({ ...mapBook(r), ownerName: (r as any).owner_name ?? null }));
 }
 
 export async function getChapters(bookId: string): Promise<ChapterRow[]> {
@@ -493,14 +528,26 @@ export async function insertGuild(name: string, teacherId: string): Promise<Guil
   // Retry a few times in the (unlikely) event of a passcode collision.
   for (let attempt = 0; attempt < 5; attempt++) {
     const passcode = generatePasscode();
+    const professorPasscode = generateProfessorPasscode();
     try {
       const row = await queryOne(
-        `INSERT INTO guilds (name, passcode, teacher_id) VALUES ($1, $2, $3) RETURNING *`,
-        [name, passcode, teacherId]
+        `INSERT INTO guilds (name, passcode, teacher_id, professor_passcode) VALUES ($1, $2, $3, $4) RETURNING *`,
+        [name, passcode, teacherId, professorPasscode]
       );
+      await linkGuildOwner(row!.id, teacherId);
       return mapGuild(row);
     } catch (e: any) {
       if (e?.code === '23505') continue; // unique violation on passcode — retry
+      if (e?.code === '42703') {
+        // Pre-0017 database (no professor_passcode column yet): create the guild
+        // exactly as before and let the migration add the column later.
+        const row = await queryOne(
+          `INSERT INTO guilds (name, passcode, teacher_id) VALUES ($1, $2, $3) RETURNING *`,
+          [name, passcode, teacherId],
+        );
+        await linkGuildOwner(row!.id, teacherId);
+        return mapGuild(row);
+      }
       throw e;
     }
   }
@@ -531,9 +578,179 @@ export async function getGuild(id: string): Promise<GuildRow | null> {
   return row ? mapGuild(row) : null;
 }
 
+/**
+ * Resolve the guild a teacher belongs to — as OWNER (the founding teacher, still
+ * recorded in guilds.teacher_id) or as a PROFESSOR (a guild_teachers row).
+ *
+ * A teacher can belong to only one guild, so the first row wins (owner first).
+ * Falls back to the legacy single-teacher column when migration 0017 has not
+ * run yet, so an existing deployment keeps resolving guilds unchanged.
+ */
 export async function getGuildByTeacher(teacherId: string): Promise<GuildRow | null> {
+  try {
+    const row = await queryOne(
+      `SELECT g.* FROM guilds g
+       JOIN guild_teachers gt ON gt.guild_id = g.id
+       WHERE gt.teacher_id = $1
+       ORDER BY (gt.role = 'owner') DESC, gt.joined_at ASC
+       LIMIT 1`,
+      [teacherId],
+    );
+    if (row) return mapGuild(row);
+  } catch (e: any) {
+    if (e?.code !== '42P01') throw e; // 42P01 = guild_teachers not migrated yet
+  }
   const row = await queryOne(`SELECT * FROM guilds WHERE teacher_id = $1`, [teacherId]);
   return row ? mapGuild(row) : null;
+}
+
+// --- guild teaching staff (owner + professors) ---------------------------------
+
+export type GuildTeacherRole = 'owner' | 'professor';
+
+export interface GuildTeacherRow {
+  id: string;
+  name: string;
+  role: GuildTeacherRole;
+  joinedAt: Date;
+}
+
+/** Record the founding teacher as the guild's 'owner' (idempotent). */
+async function linkGuildOwner(guildId: string, teacherId: string): Promise<void> {
+  try {
+    await query(
+      `INSERT INTO guild_teachers (guild_id, teacher_id, role) VALUES ($1, $2, 'owner')
+       ON CONFLICT (guild_id, teacher_id) DO NOTHING`,
+      [guildId, teacherId],
+    );
+  } catch (e: any) {
+    // Pre-0017 database: guilds.teacher_id alone still identifies the owner.
+    if (e?.code !== '42P01') throw e;
+  }
+}
+
+/** Is this teacher in that guild, and with which role? (null = not a member) */
+export async function getGuildTeacherRole(guildId: string, teacherId: string): Promise<GuildTeacherRole | null> {
+  try {
+    const row = await queryOne<{ role: string }>(
+      `SELECT role FROM guild_teachers WHERE guild_id = $1 AND teacher_id = $2`,
+      [guildId, teacherId],
+    );
+    if (row) return row.role === 'owner' ? 'owner' : 'professor';
+    return null;
+  } catch (e: any) {
+    if (e?.code !== '42P01') throw e;
+  }
+  const legacy = await queryOne(`SELECT id FROM guilds WHERE id = $1 AND teacher_id = $2`, [guildId, teacherId]);
+  return legacy ? 'owner' : null;
+}
+
+/** The guild's teaching staff: owner first, then professors by join order. */
+export async function listGuildTeachers(guildId: string): Promise<GuildTeacherRow[]> {
+  try {
+    const rows = await query<{ id: string; name: string; role: string; joined_at: Date }>(
+      `SELECT u.id, u.name, gt.role, gt.joined_at
+       FROM guild_teachers gt JOIN users u ON u.id = gt.teacher_id
+       WHERE gt.guild_id = $1
+       ORDER BY (gt.role = 'owner') DESC, gt.joined_at ASC`,
+      [guildId],
+    );
+    if (rows.length > 0 || (await guildHasStaffTable())) {
+      return rows.map((r) => ({ id: r.id, name: r.name, role: r.role === 'owner' ? 'owner' : 'professor', joinedAt: new Date(r.joined_at) }));
+    }
+  } catch (e: any) {
+    if (e?.code !== '42P01') throw e;
+  }
+  // Pre-0017 fallback: the founding teacher is the only teacher.
+  const rows = await query<{ id: string; name: string; teacher_id: string }>(
+    `SELECT g.teacher_id, u.id, u.name FROM guilds g JOIN users u ON u.id = g.teacher_id WHERE g.id = $1`,
+    [guildId],
+  );
+  return rows.map((r) => ({ id: r.id, name: r.name, role: 'owner' as const, joinedAt: new Date() }));
+}
+
+/** Does guild_teachers exist? (distinguishes "no staff" from "not migrated") */
+async function guildHasStaffTable(): Promise<boolean> {
+  const row = await queryOne<{ exists: boolean }>(`SELECT to_regclass('public.guild_teachers') IS NOT NULL AS exists`);
+  return !!row?.exists;
+}
+
+/** Add a teacher to a guild. Returns false when they were already a member. */
+export async function addGuildTeacher(guildId: string, teacherId: string, role: GuildTeacherRole = 'professor'): Promise<boolean> {
+  const inserted = await execute(
+    `INSERT INTO guild_teachers (guild_id, teacher_id, role) VALUES ($1, $2, $3)
+     ON CONFLICT (guild_id, teacher_id) DO NOTHING`,
+    [guildId, teacherId, role],
+  );
+  return inserted > 0;
+}
+
+/**
+ * Remove a PROFESSOR from a guild. The owner row can never be deleted this way
+ * (dropping the founder would orphan the guild) — returns false for it.
+ */
+export async function removeGuildTeacher(guildId: string, teacherId: string): Promise<boolean> {
+  const removed = await execute(
+    `DELETE FROM guild_teachers WHERE guild_id = $1 AND teacher_id = $2 AND role = 'professor'`,
+    [guildId, teacherId],
+  );
+  return removed > 0;
+}
+
+/** Visual prefix that keeps professor codes unmistakable next to student ones. */
+export const PROFESSOR_PASSCODE_PREFIX = 'PROF-';
+
+export function generateProfessorPasscode(): string {
+  return PROFESSOR_PASSCODE_PREFIX + generatePasscode();
+}
+
+/** Mint a fresh professor code (unique across guilds). */
+export async function regenerateProfessorPasscode(guildId: string): Promise<GuildRow> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = generateProfessorPasscode();
+    try {
+      const row = await queryOne(
+        `UPDATE guilds SET professor_passcode = $1 WHERE id = $2 RETURNING *`,
+        [code, guildId],
+      );
+      return mapGuild(row);
+    } catch (e: any) {
+      if (e?.code === '23505') continue;
+      throw e;
+    }
+  }
+  throw new Error('Could not generate a unique professor passcode');
+}
+
+/** The guild's professor code, minted on first request for pre-0017 guilds. */
+export async function ensureProfessorPasscode(guildId: string): Promise<string> {
+  try {
+    const row = await queryOne<{ professor_passcode: string | null }>(
+      `SELECT professor_passcode FROM guilds WHERE id = $1`,
+      [guildId],
+    );
+    if (row?.professor_passcode) return row.professor_passcode;
+    return (await regenerateProfessorPasscode(guildId)).professorPasscode ?? '';
+  } catch (e: any) {
+    // Pre-0017 database: the column does not exist yet. Reading the guild must
+    // still work (the profile simply shows no code until migrations run).
+    if (e?.code === '42703' || e?.code === '42P01') return '';
+    throw e;
+  }
+}
+
+export async function getGuildByProfessorPasscode(passcode: string): Promise<GuildRow | null> {
+  // Normalise what a teacher typed: trim, uppercase, and tolerate a missing
+  // dash or prefix ("prof abc123" still resolves).
+  const raw = passcode.trim().toUpperCase().replace(/\s+/g, '');
+  const candidates = new Set([raw]);
+  if (raw.startsWith(PROFESSOR_PASSCODE_PREFIX)) candidates.add(raw.slice(PROFESSOR_PASSCODE_PREFIX.length));
+  else candidates.add(PROFESSOR_PASSCODE_PREFIX + raw);
+  for (const code of candidates) {
+    const row = await queryOne(`SELECT * FROM guilds WHERE upper(professor_passcode) = upper($1)`, [code]);
+    if (row) return mapGuild(row);
+  }
+  return null;
 }
 
 export async function getGuildByPasscode(passcode: string): Promise<GuildRow | null> {

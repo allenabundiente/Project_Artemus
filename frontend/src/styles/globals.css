@@ -402,10 +402,52 @@ canvas {
 
 @media (max-height: 560px) {
   .code-editor-wrap {
-    max-height: 40vh;
+    max-height: 30vh;
   }
   .code-editor {
-    min-height: 120px;
+    min-height: 96px;
+  }
+  /* A landscape phone can't fit the monster stage, prompt, editor, results
+     and buttons at once, so the code exercise becomes its own column: the
+     editor takes the leftover height and the buttons stay visible. */
+  .modal-overlay > .dialog-box:has(.code-challenge) {
+    display: flex;
+    flex-direction: column;
+    padding: 0.6rem 0.8rem;
+    /* Taller results (a failed run shows expected/actual) scroll the dialog
+       instead of being clipped. */
+    overflow-y: auto;
+    max-height: calc(100dvh - 0.75rem);
+  }
+  .modal-overlay > .dialog-box:has(.code-challenge) .battle-stage {
+    /* !important: the stage's inline display:flex would otherwise win */
+    display: none !important; /* the HUD keeps player hearts; the status line reports hits */
+  }
+  .modal-overlay > .dialog-box:has(.code-challenge) .status-text {
+    margin: 0.3rem 0 !important;
+    font-size: 0.85rem !important;
+  }
+  .code-challenge {
+    display: flex;
+    flex-direction: column;
+    flex: 1 0 auto;
+    min-height: 0;
+  }
+  .code-challenge .code-editor-wrap {
+    flex: 1;
+    max-height: none;
+    min-height: 72px;
+  }
+  .code-challenge .code-editor {
+    min-height: 0; /* the wrapper's flex height decides, not the textarea */
+  }
+  .code-results {
+    flex-shrink: 0;
+  }
+  .code-actions {
+    flex-shrink: 0;
+    margin-top: 0.5rem;
+    gap: 0.4rem;
   }
 }
 

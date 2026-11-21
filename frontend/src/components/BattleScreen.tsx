@@ -107,6 +107,7 @@ export default function BattleScreen({ queue, maxHp, lives, boss = false, onDama
 
       {/* monster stage */}
       <div
+        className="battle-stage"
         style={{
           background: 'var(--p-black)',
           border: `3px solid ${boss ? 'var(--p-red)' : 'var(--p-green)'}`,

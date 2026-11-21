@@ -10,7 +10,8 @@ import { buildLessonOverview } from '../services/lesson.js';
 import { hashPassword, verifyPassword, requireAuth, requireAdmin, requireRole, signToken } from '../services/auth.js';
 import { isFeatureLocked, sanitizeAvatar } from '../db/admin.js';
 import { registerAdminRoutes, fetchCustomThemes } from './admin.js';
-import { moderateText, ocrPdf, cacheGet, cacheSet, hashKey, integrationStatus, requireCaptcha } from '../services/integrations.js';
+import { moderateText, ocrPdf, cacheGet, cacheSet, hashKey, integrationStatus, requireCaptcha, rateLimit } from '../services/integrations.js';
+import { publicChallengePayload, runTestsForChallenge, normalizeTests, normalizeCodeExercise, verifyCodeExercise, isSupportedLanguage, codeRunnerConfigured } from '../services/codeExercises.js';
 import { gameModeTimeBonus, gameModeLabel, isGameMode, GAME_MODES } from '../services/gameModes.js';
 import { generateDungeonMap, validateDungeonMap } from '../services/dungeonGenerator.js';
 import {
@@ -1291,7 +1292,15 @@ export function createApiRouter(): Router {
       }
     }
 
-    res.json({ chapter: { id: chapter.id, title: chapter.title }, challenges: await getChallengesForChapter(chapterId) });
+    // Code exercises are sanitized here: reference solutions, hidden test data
+    // and the placeholder correctAnswer never leave the server. Every other
+    // challenge type is returned exactly as before.
+    const rows = await getChallengesForChapter(chapterId);
+    res.json({
+      chapter: { id: chapter.id, title: chapter.title },
+      codeRunnerAvailable: codeRunnerConfigured(),
+      challenges: rows.map(publicChallengePayload),
+    });
   });
 
   // Lesson overview shown before a student starts the quest. Same access
@@ -1470,8 +1479,9 @@ export function createApiRouter(): Router {
     const book = await getBook(bookId);
     if (!book) return res.status(404).json({ error: 'Book not found' });
     const user = await getUserById(req.user!.id);
-    const allowed = book.ownerId === user?.id || (book.guildId && user?.guildId === book.guildId);
-    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+    // Manage rights only: this feed carries answers (and, for code exercises,
+    // the reference solution + hidden tests) and must never reach students.
+    if (!user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
     const chapters = await getChapters(bookId);
     const out = await Promise.all(chapters.map(async (c) => ({
       chapterId: c.id, idx: c.idx, title: c.title,
@@ -1504,6 +1514,9 @@ export function createApiRouter(): Router {
       monsterDifficulty: ts.monsterDifficulty,
       difficultyMix: ts.difficultyMix,
       targetCount: book.questCount,
+      // Without the book's mode the programming directive (and its code
+      // exercises) never applies to a replaced challenge.
+      quizMode: book.quizMode,
     };
 
     let fresh: GeneratedChallenge | null = null;
@@ -1529,6 +1542,104 @@ export function createApiRouter(): Router {
     await replaceChallenge(challenge.id, { ...fresh, bookId: chapter.bookId, chapterId: chapter.id, ord, quest: null });
     const updated = await getChallenge(challenge.id);
     res.json({ challenge: updated });
+  });
+
+  /**
+   * Run a student's program for ONE code_exercise and report per-test results.
+   * The server alone decides correctness: `passed` is true only when every
+   * test passes. `sample: true` runs the visible tests only (the RUN button)
+   * and can never count as a submit. Hidden tests report pass/fail and name,
+   * never their expected output.
+   */
+  router.post('/challenges/:id/run-tests', requireAuth, rateLimit('run-tests', 12, 60), async (req, res) => {
+    if (!codeRunnerConfigured()) {
+      return res.status(503).json({ error: 'Code runner unavailable — ask your teacher to configure JUDGE0_URL.' });
+    }
+    const challenge = await getChallenge(String(req.params.id));
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+    if (challenge.type !== 'code_exercise') return res.status(400).json({ error: 'This challenge is not a code exercise' });
+
+    const book = await getBook(challenge.bookId);
+    const user = await getUserById(req.user!.id);
+    if (!book || !user || !(await canViewBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
+    if (!isBookPlayable(book) && !(await canManageBook(user, book))) {
+      return res.status(423).json({ error: bookLockedMessage(book) });
+    }
+    if (!isSupportedLanguage(challenge.language) || !challenge.tests || challenge.tests.length === 0) {
+      return res.status(400).json({ error: 'This exercise is not runnable — ask your teacher to fix it.' });
+    }
+
+    const source = req.body?.source;
+    if (typeof source !== 'string' || !source.trim()) {
+      return res.status(400).json({ error: 'Write some code before running it.' });
+    }
+    if (source.length > 20_000) {
+      return res.status(400).json({ error: 'Your program is too long (max 20,000 characters).' });
+    }
+
+    try {
+      res.json(await runTestsForChallenge(challenge, source, req.body?.sample === true));
+    } catch (e) {
+      console.error('[runTests]', e);
+      res.status(502).json({ error: 'The code runner failed — please try again.' });
+    }
+  });
+
+  /**
+   * Teacher edit for one code_exercise: task, starter code, language, tests,
+   * and reference solution. When the runner is configured the reference must
+   * pass every test before the edit is stored, so a broken exercise can never
+   * reach students.
+   */
+  router.put('/challenges/:id/code', requireAuth, async (req, res) => {
+    const challenge = await getChallenge(String(req.params.id));
+    if (!challenge) return res.status(404).json({ error: 'Challenge not found' });
+    if (challenge.type !== 'code_exercise') return res.status(400).json({ error: 'This challenge is not a code exercise' });
+    const book = await getBook(challenge.bookId);
+    const user = await getUserById(req.user!.id);
+    if (!book || !user || !(await canManageBook(user, book))) return res.status(403).json({ error: 'Not allowed' });
+    const chapter = await getChapter(challenge.chapterId);
+    if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
+
+    const body = req.body ?? {};
+    const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : challenge.prompt;
+    const explanation = typeof body.explanation === 'string' && body.explanation.trim()
+      ? body.explanation.trim()
+      : challenge.explanation;
+    const starterCode = typeof body.starterCode === 'string' ? body.starterCode : (challenge.starterCode ?? '');
+    const referenceSolution = typeof body.referenceSolution === 'string' ? body.referenceSolution : (challenge.referenceSolution ?? '');
+    const language = typeof body.language === 'string' ? body.language.trim().toLowerCase() : (challenge.language ?? '');
+    const tests = body.tests === undefined ? challenge.tests : normalizeTests(body.tests);
+    if (!tests) {
+      return res.status(400).json({ error: 'tests must be a non-empty array of { name, stdin, expectedStdout, hidden }' });
+    }
+    if (!isSupportedLanguage(language)) {
+      return res.status(400).json({ error: 'That language is not supported by the code runner' });
+    }
+    const difficulty = challenge.difficulty === 'easy' || challenge.difficulty === 'hard' ? challenge.difficulty : 'medium';
+    const normalized = normalizeCodeExercise(
+      {
+        type: 'code_exercise', prompt, code: null, options: null, correctAnswer: challenge.correctAnswer,
+        explanation, difficulty, language, starterCode, referenceSolution, tests,
+      },
+      chapter,
+      { requireRunner: false },
+    );
+    if (!normalized) {
+      return res.status(400).json({
+        error: 'A code exercise needs a task, starter code, a supported language, a reference solution, and 3-5 tests with at least one hidden.',
+      });
+    }
+
+    let verified = false;
+    if (codeRunnerConfigured()) {
+      verified = await verifyCodeExercise(normalized);
+      if (!verified) {
+        return res.status(400).json({ error: 'The reference solution does not pass every test — fix the expected output or the solution.' });
+      }
+    }
+    await replaceChallenge(challenge.id, { ...challenge, ...normalized, quest: null });
+    res.json({ challenge: await getChallenge(challenge.id), verified });
   });
 
   // --- Progress --------------------------------------------------------------------

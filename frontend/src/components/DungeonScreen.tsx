@@ -9,6 +9,7 @@ import RuneSocketDialog from './RuneSocketDialog';
 import ChestLockDialog from './ChestLockDialog';
 import TouchControls from './TouchControls';
 import { gameModeLabel, gameModeRules, pickBossQueue, resolveGameMode } from '../game/gameModes';
+import { playableChallenges } from '../game/codeExercises';
 
 interface Props {
   bookId: string;
@@ -137,8 +138,9 @@ export default function DungeonScreen({ bookId, chapterId, chapterIdx, term, gam
         const rules = gameModeRules(activeMode, termInfo.settings.timeLimitSeconds);
         setMode(activeMode);
         setTimeLeft(rules.timeLimitSeconds);
-        if (activeMode === 'boss' && bossChallenges.length > 0) {
-          const queue = pickBossQueue(bossChallenges);
+        const bossPool = playableChallenges(bossChallenges);
+        if (activeMode === 'boss' && bossPool.length > 0) {
+          const queue = pickBossQueue(bossPool);
           bossQueueRef.current = queue;
           setBossQueue(queue);
         }

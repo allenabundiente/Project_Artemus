@@ -12,14 +12,25 @@ import type { ChapterRow } from '../db/types.js';
 
 /** Re-exported for plugin authors' convenience. */
 export type { ChapterRow } from '../db/types.js';
+import type { CodeTest } from '../db/types.js';
+export type { CodeTest } from '../db/types.js';
+
 export interface GeneratedChallenge {
-  type: 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
+  type: 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer' | 'code_exercise';
   prompt: string;
   code: string | null;
   options: string[] | null;
   correctAnswer: string;
   explanation: string;
   difficulty: 'easy' | 'medium' | 'hard';
+  /** code_exercise only — Judge0 language key. */
+  language?: string | null;
+  /** code_exercise only — preloaded editor contents with a TODO. */
+  starterCode?: string | null;
+  /** code_exercise only — stdin → expected stdout tests (hidden included). */
+  tests?: CodeTest[] | null;
+  /** code_exercise only — reference program; never sent to students. */
+  referenceSolution?: string | null;
 }
 
 /** How a book's quiz mode was chosen (for the UI + logs). */

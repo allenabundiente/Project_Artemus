@@ -1,4 +1,15 @@
-export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
+export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer' | 'code_exercise';
+
+/**
+ * One test of a code exercise. Students only ever receive the non-hidden ones
+ * (with their expected stdout); hidden tests arrive as a count, never as data.
+ */
+export interface CodeTest {
+  name: string;
+  stdin: string;
+  expectedStdout: string;
+  hidden?: boolean;
+}
 
 export interface Challenge {
   id: string;
@@ -11,6 +22,40 @@ export interface Challenge {
   correctAnswer: string;
   explanation: string;
   difficulty: 'easy' | 'medium' | 'hard';
+  /** code_exercise only — Judge0 language key. */
+  language?: string | null;
+  /** code_exercise only — preloaded editor contents with a TODO. */
+  starterCode?: string | null;
+  /** code_exercise only — visible tests only (hidden ones are counted, not sent). */
+  tests?: CodeTest[] | null;
+  /** code_exercise only — how many tests students cannot see. */
+  hiddenTestCount?: number;
+  /** code_exercise only — false when JUDGE0_URL is unset on the server. */
+  codeRunnerAvailable?: boolean;
+  /** Teacher review feed only — students never receive this. */
+  referenceSolution?: string | null;
+}
+
+/** One test's outcome from the server-run code exercise. */
+export interface CodeTestResult {
+  name: string;
+  hidden: boolean;
+  passed: boolean;
+  stdout: string;
+  stderr: string;
+  compileOutput: string;
+  status: string;
+  /** Only present for visible tests. */
+  stdin?: string;
+  /** Only present for visible tests. */
+  expectedStdout?: string;
+}
+
+export interface RunTestsResponse {
+  /** True only when EVERY test passed (never true for a sample run). */
+  passed: boolean;
+  sample: boolean;
+  results: CodeTestResult[];
 }
 
 export interface BookMeta {

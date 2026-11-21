@@ -6,6 +6,7 @@ import { loadSprites, spriteDataUrl } from '../game/sprites';
 import { packAssetsOnce } from '../game/packAvatar';
 import { getAnimations, loadExtraSprites } from '../game/animations';
 import { dealQuestPlan, type QuestPlan } from '../game/questPlan';
+import { playableChallenges } from '../game/codeExercises';
 import { gameModeLabel, gameModeRules, pickBossQueue, resolveGameMode } from '../game/gameModes';
 import { sfx } from '../game/sfx';
 import { loadCustomThemes, resolveTheme } from '../game/themes';
@@ -92,7 +93,10 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, gameM
           loadCustomThemes(),
         ]);
         if (cancelled) return;
-        if (challenges.length === 0) {
+        // Code exercises with no server runner are skipped rather than shown
+        // broken, and must never leave a quest with nothing to play.
+        const pool = playableChallenges(challenges);
+        if (pool.length === 0) {
           setError('This quest has no monsters yet. Ask your guild master to regenerate the tome.');
           return;
         }
@@ -109,10 +113,10 @@ export default function LevelScreen({ bookId, chapterId, chapterIdx, term, gameM
         // challenge is dealt exactly once. The boss's queue is the set the
         // student will already have faced during this run.
         const seed = Math.floor(Math.random() * 0x7fffffff);
-        const plan = dealQuestPlan(challenges, termInfo.settings.monsterDifficulty, seed);
+        const plan = dealQuestPlan(pool, termInfo.settings.monsterDifficulty, seed);
         // Boss Rush: a real boss built from the chapter's HARDEST questions,
         // instead of the classic gate re-asking what the run already faced.
-        if (rules.bossFromHardest) plan.bossQueue = pickBossQueue(challenges);
+        if (rules.bossFromHardest) plan.bossQueue = pickBossQueue(pool);
         planRef.current = plan;
         const sprites = await loadSprites();
         // Asset pack for the buyable pack-character skins (best-effort).

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../api';
 import type { BookChallengeReview, Challenge } from '../types';
+import CodeExerciseEditor from './CodeExerciseEditor';
 
 const TYPE_LABELS: Record<string, string> = {
   multiple_choice: 'CHOICE',
@@ -9,6 +10,7 @@ const TYPE_LABELS: Record<string, string> = {
   fill_in_blank: 'BLANK',
   true_false: 'TRUE/FALSE',
   short_answer: 'SHORT ANSWER',
+  code_exercise: 'CODE',
 };
 
 interface Props {
@@ -25,6 +27,7 @@ interface Props {
 export default function ChallengeReview({ bookId, term, onBack, onRegenerated }: Props) {
   const [review, setReview] = useState<BookChallengeReview | null>(null);
   const [regenerating, setRegenerating] = useState<string | null>(null);
+  const [editingCode, setEditingCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -39,6 +42,21 @@ export default function ChallengeReview({ bookId, term, onBack, onRegenerated }:
   useEffect(() => {
     void load();
   }, [load]);
+
+  function replaceInReview(challenge: Challenge) {
+    setReview((r) =>
+      r
+        ? {
+            ...r,
+            chapters: r.chapters.map((ch) => ({
+              ...ch,
+              challenges: ch.challenges.map((old) => (old.id === challenge.id ? challenge : old)),
+            })),
+          }
+        : r,
+    );
+    onRegenerated?.();
+  }
 
   async function handleRegenerate(c: Challenge) {
     setError(null);
@@ -86,35 +104,86 @@ export default function ChallengeReview({ bookId, term, onBack, onRegenerated }:
           </p>
           {ch.challenges.length === 0 && <p className="status-text" style={{ margin: 0 }}>No challenges in this chapter yet.</p>}
           {ch.challenges.map((c) => (
-            <div
-              key={c.id}
-              className="leaderboard-row"
-              style={{ alignItems: 'flex-start', opacity: regenerating === c.id ? 0.5 : 1 }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--d-stone-light)', margin: '0 0 0.2rem' }}>
-                  {TYPE_LABELS[c.type] ?? c.type.toUpperCase()} · {c.difficulty.toUpperCase()}
-                </p>
-                <p className="term-font" style={{ fontSize: '1rem', margin: 0, whiteSpace: 'pre-wrap' }}>{c.prompt}</p>
-                {c.code && <pre className="code-block" style={{ fontSize: '0.6rem' }}>{c.code}</pre>}
-                {c.options && (
-                  <p className="term-font" style={{ fontSize: '0.85rem', color: 'var(--d-stone-light)', margin: '0.2rem 0 0' }}>
-                    {c.options.join(' · ')}
-                  </p>
-                )}
-                <p className="term-font" style={{ fontSize: '0.85rem', color: 'var(--p-yellow)', margin: '0.2rem 0 0' }}>
-                  Answer: {c.correctAnswer}
-                </p>
-              </div>
-              <button
-                className="pixel-btn pixel-btn--ghost"
-                style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem', flexShrink: 0 }}
-                disabled={regenerating !== null}
-                title="Discard this challenge and summon a fresh one from the same chapter"
-                onClick={() => void handleRegenerate(c)}
+            <div key={c.id}>
+              <div
+                className="leaderboard-row"
+                style={{ alignItems: 'flex-start', opacity: regenerating === c.id ? 0.5 : 1 }}
               >
-                {regenerating === c.id ? '…' : '⟳ RE-SUMMON'}
-              </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p className="pixel-font" style={{ fontSize: '0.5rem', color: 'var(--d-stone-light)', margin: '0 0 0.2rem' }}>
+                    {TYPE_LABELS[c.type] ?? c.type.toUpperCase()} · {c.difficulty.toUpperCase()}
+                  </p>
+                  <p className="term-font" style={{ fontSize: '1rem', margin: 0, whiteSpace: 'pre-wrap' }}>{c.prompt}</p>
+                  {c.type === 'code_exercise' ? (
+                    <div style={{ marginTop: '0.25rem' }}>
+                      <p className="pixel-font" style={{ fontSize: '0.45rem', color: 'var(--d-stone-light)', margin: '0 0 0.2rem' }}>
+                        {c.language ?? 'unknown language'} · {(c.tests ?? []).length} tests · {(c.tests ?? []).filter((t) => t.hidden).length} hidden
+                      </p>
+                      {c.starterCode && <pre className="code-block" style={{ fontSize: '0.6rem' }}>{c.starterCode}</pre>}
+                      <details style={{ marginTop: '0.25rem' }}>
+                        <summary className="term-font" style={{ fontSize: '0.85rem', cursor: 'pointer', color: 'var(--p-yellow)' }}>
+                          Tests &amp; reference solution
+                        </summary>
+                        {(c.tests ?? []).map((t, i) => (
+                          <div key={i} style={{ marginTop: '0.2rem' }}>
+                            <p className="pixel-font" style={{ fontSize: '0.45rem', margin: 0, color: 'var(--d-stone-light)' }}>
+                              {t.name}{t.hidden ? ' · HIDDEN' : ''}
+                            </p>
+                            <pre className="code-block" style={{ fontSize: '0.6rem' }}>
+                              {`stdin: ${t.stdin || '(none)'}\nexpected: ${t.expectedStdout}`}
+                            </pre>
+                          </div>
+                        ))}
+                        {c.referenceSolution && (
+                          <pre className="code-block" style={{ fontSize: '0.6rem' }}>{c.referenceSolution}</pre>
+                        )}
+                      </details>
+                    </div>
+                  ) : (
+                    <>
+                      {c.code && <pre className="code-block" style={{ fontSize: '0.6rem' }}>{c.code}</pre>}
+                      {c.options && (
+                        <p className="term-font" style={{ fontSize: '0.85rem', color: 'var(--d-stone-light)', margin: '0.2rem 0 0' }}>
+                          {c.options.join(' · ')}
+                        </p>
+                      )}
+                      <p className="term-font" style={{ fontSize: '0.85rem', color: 'var(--p-yellow)', margin: '0.2rem 0 0' }}>
+                        Answer: {c.correctAnswer}
+                      </p>
+                    </>
+                  )}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', flexShrink: 0 }}>
+                  {c.type === 'code_exercise' && (
+                    <button
+                      className="pixel-btn pixel-btn--ghost"
+                      style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                      onClick={() => setEditingCode((id) => (id === c.id ? null : c.id))}
+                    >
+                      {editingCode === c.id ? 'CLOSE' : '✎ EDIT'}
+                    </button>
+                  )}
+                  <button
+                    className="pixel-btn pixel-btn--ghost"
+                    style={{ fontSize: '0.55rem', padding: '0.25rem 0.5rem' }}
+                    disabled={regenerating !== null}
+                    title="Discard this challenge and summon a fresh one from the same chapter"
+                    onClick={() => void handleRegenerate(c)}
+                  >
+                    {regenerating === c.id ? '…' : '⟳ RE-SUMMON'}
+                  </button>
+                </div>
+              </div>
+              {editingCode === c.id && c.type === 'code_exercise' && (
+                <CodeExerciseEditor
+                  challenge={c}
+                  onCancel={() => setEditingCode(null)}
+                  onSaved={(updated) => {
+                    replaceInReview(updated);
+                    setEditingCode(null);
+                  }}
+                />
+              )}
             </div>
           ))}
         </div>

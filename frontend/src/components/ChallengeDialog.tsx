@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Challenge } from '../types';
+import CodeChallenge from './CodeChallenge';
 
 interface Props {
   challenge: Challenge;
@@ -58,7 +59,22 @@ export default function ChallengeDialog({ challenge, onResult, onDismiss, disabl
     fill_in_blank: 'FILL IN THE BLANK',
     true_false: 'TRUTH OR LIE',
     short_answer: 'SPEAK YOUR ANSWER',
+    code_exercise: 'WRITE THE CODE',
   };
+
+  // Coding exercises need the editor, so they render their own panel inside
+  // this dialog (the only surface that can host it — never the dungeon's
+  // chest/rune dialogs).
+  if (challenge.type === 'code_exercise') {
+    return (
+      <CodeChallenge
+        challenge={challenge}
+        disabled={disabled}
+        onResult={onResult}
+        onDismiss={onDismiss}
+      />
+    );
+  }
 
   return (
     <div className="dialog-box" style={{ maxWidth: 640, margin: '0 auto' }}>

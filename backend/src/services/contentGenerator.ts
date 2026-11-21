@@ -1,11 +1,12 @@
 import { callLlm, LlmError } from './llmClient.js';
-import type { ChapterRow, CodeBlock } from '../db/types.js';
+import type { ChapterRow, CodeBlock, CodeTest } from '../db/types.js';
 import { initPlugins, resolvePluginFor, pluginById, promptDirectiveFor, validateWithPlugin } from '../plugins/index.js';
 import type { QuizMode } from '../plugins/types.js';
+import { normalizeTests, applyCodeExercisePolicy } from './codeExercises.js';
 
 export type { QuizMode } from '../plugins/types.js';
 
-export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer';
+export type ChallengeType = 'multiple_choice' | 'predict_output' | 'spot_the_bug' | 'fill_in_blank' | 'true_false' | 'short_answer' | 'code_exercise';
 
 export interface GeneratedChallenge {
   type: ChallengeType;
@@ -15,6 +16,14 @@ export interface GeneratedChallenge {
   correctAnswer: string;
   explanation: string;
   difficulty: 'easy' | 'medium' | 'hard';
+  /** code_exercise only — Judge0 language key ('javascript', 'python', …). */
+  language?: string | null;
+  /** code_exercise only — preloaded editor contents with a TODO. */
+  starterCode?: string | null;
+  /** code_exercise only — stdin → expected stdout tests (hidden included). */
+  tests?: CodeTest[] | null;
+  /** code_exercise only — reference program; never sent to students. */
+  referenceSolution?: string | null;
 }
 
 export interface ChapterContent {
@@ -85,7 +94,7 @@ function pluginForMode(mode: QuizMode | undefined) {
   return pluginById(mode === 'programming' ? 'programming' : 'general');
 }
 
-const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank', 'true_false', 'short_answer']);
+const VALID_TYPES = new Set(['multiple_choice', 'predict_output', 'spot_the_bug', 'fill_in_blank', 'true_false', 'short_answer', 'code_exercise']);
 const VALID_DIFFICULTY = new Set(['easy', 'medium', 'hard']);
 
 const SYSTEM_PROMPT = `You are the content engine for "QuestBook", a retro arcade game that teaches real material from uploaded books and documents.
@@ -99,13 +108,17 @@ Rules:
   "concept": "string — the single core concept this chapter teaches",
   "challenges": [
     {
-      "type": "multiple_choice | predict_output | spot_the_bug | fill_in_blank | true_false | short_answer",
+      "type": "multiple_choice | predict_output | spot_the_bug | fill_in_blank | true_false | short_answer | code_exercise",
       "prompt": "string — the question, written like a game prompt",
       "code": "string or null — required for predict_output and spot_the_bug; optional for others",
       "options": ["4 strings — REQUIRED for multiple_choice, predict_output and true_false, null otherwise; exactly one must be correct. For true_false exactly two: \"True\" and \"False\"."],
       "correctAnswer": "string — must match one of options exactly when options are present",
       "explanation": "string — 1-2 sentences that teach, tied to the book's own wording",
-      "difficulty": "easy | medium | hard"
+      "difficulty": "easy | medium | hard",
+      "language": "code_exercise ONLY — a language id from the directive",
+      "starterCode": "code_exercise ONLY — preloaded editor contents that contain a TODO",
+      "referenceSolution": "code_exercise ONLY — a complete working program",
+      "tests": "code_exercise ONLY — [{ name, stdin, expectedStdout, hidden }]"
     }
   ]
 }
@@ -114,7 +127,8 @@ Rules:
 - Distractors must be PLAUSIBLE and drawn from adjacent concepts in this same text (near-miss values, similar-sounding terms, common misconceptions) — never random noise and never "all of the above".
 - Vary the angle on each challenge: every prompt must be recognizably DIFFERENT from the others (different snippet, different blank, different distractor set) — never paraphrase the same question twice.
 - Mix types. Use the book's real code snippets — do not rewrite them except to introduce one deliberate bug for spot_the_bug.
-- Keep code snippets short (under 15 lines).`;
+- Keep code snippets short (under 15 lines).
+- code_exercise is available ONLY when the mode directive below explicitly offers it; never invent it otherwise, and never make every challenge in a batch a code exercise.`;
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n) + '\n…[truncated]…';
@@ -186,6 +200,23 @@ function validateGenerated(raw: any): ChapterContent {
     const difficulty = VALID_DIFFICULTY.has(c.difficulty) ? c.difficulty : 'medium';
     const code = typeof c.code === 'string' && c.code.trim().length > 0 ? c.code.trim() : null;
     const explanation = typeof c.explanation === 'string' ? c.explanation.trim() : 'Review the chapter for more detail.';
+
+    // Code exercises carry their own payload; the plugin policy later verifies
+    // the reference solution and caps how many survive.
+    if (type === 'code_exercise') {
+      const language = typeof c.language === 'string' ? c.language.trim().toLowerCase() : '';
+      const starterCode = typeof c.starterCode === 'string' ? c.starterCode.trim() : '';
+      const referenceSolution = typeof c.referenceSolution === 'string' ? c.referenceSolution.trim() : '';
+      const tests = normalizeTests(c.tests);
+      if (!language || !starterCode || !referenceSolution || !tests) continue;
+      challenges.push({
+        type, prompt, code: null, options: null,
+        correctAnswer: 'Verified by tests',
+        explanation, difficulty, language, starterCode, tests, referenceSolution,
+      });
+      continue;
+    }
+
     let options: string[] | null = null;
     let correctAnswer = typeof c.correctAnswer === 'string' ? c.correctAnswer.trim() : '';
 
@@ -282,7 +313,17 @@ export async function generateWithLlm(chapter: ChapterRow, opts?: GenerationOpti
       const filtered = content.challenges
         .map((c) => validateWithPlugin(plugin, c, pluginCtx))
         .filter((c): c is NonNullable<typeof c> => c !== null);
-      return filtered.length > 0 ? { concept: content.concept, challenges: filtered } : content;
+      // Code exercises are the one type that needs a server round-trip before
+      // it may be stored: cap the share, drop anything unverifiable, and
+      // backfill from the heuristic bench so the chapter still hits its count.
+      const base = filtered.length > 0 ? filtered : content.challenges;
+      const challenges = await applyCodeExercisePolicy({
+        challenges: base,
+        chapter,
+        pluginId: plugin.id,
+        fallback: () => generateHeuristically(chapter, opts?.targetCount ?? null).challenges,
+      });
+      return { concept: content.concept, challenges };
     } catch (e) {
       lastErr = e as Error;
     }

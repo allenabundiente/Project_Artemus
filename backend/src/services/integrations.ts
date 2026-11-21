@@ -101,7 +101,7 @@ export const JUDGE0_LANGUAGES: Record<string, number> = {
   rust: 73,
 };
 
-export async function runCode(source: string, language: string, stdin = ''): Promise<CodeRunResult> {
+export async function runCode(source: string, language: string, stdin = '', timeoutMs = 20_000): Promise<CodeRunResult> {
   const base = env('JUDGE0_URL').replace(/\/+$/, '');
   if (!base) throw new IntegrationError('judge0', 'JUDGE0_URL is not set');
   const languageId = JUDGE0_LANGUAGES[language.toLowerCase()];
@@ -116,7 +116,7 @@ export async function runCode(source: string, language: string, stdin = ''): Pro
     method: 'POST',
     headers,
     body: JSON.stringify({ source_code: source, language_id: languageId, stdin, cpu_time_limit: 5 }),
-    timeoutMs: 20_000,
+    timeoutMs,
   });
   return {
     stdout: out.stdout ?? null,

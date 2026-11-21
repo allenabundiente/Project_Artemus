@@ -28,6 +28,17 @@ export interface ChapterRow {
   compiled: CompiledLesson | null;
 }
 
+/**
+ * One test of a code_exercise: `stdin` is fed to the program and its stdout
+ * must match `expectedStdout`. Hidden tests never reach the browser's payload.
+ */
+export interface CodeTest {
+  name: string;
+  stdin: string;
+  expectedStdout: string;
+  hidden: boolean;
+}
+
 /** One removable blank of a code_completion_quest program. */
 export interface QuestBlank {
   id: string;
@@ -52,6 +63,14 @@ export interface ChallengeRow {
   ord: number;
   /** code_completion_quest only: the quest title + full program + blanks. */
   quest: { title: string; fullSourceCode: string; blanks: QuestBlank[] } | null;
+  /** code_exercise only: Judge0 language key (null on every other type). */
+  language?: string | null;
+  /** code_exercise only: preloaded editor contents with a TODO. */
+  starterCode?: string | null;
+  /** code_exercise only: the exercise's tests (hidden ones included). */
+  tests?: CodeTest[] | null;
+  /** code_exercise only: the reference program — never sent to students. */
+  referenceSolution?: string | null;
 }
 
 export interface ProgressRow {

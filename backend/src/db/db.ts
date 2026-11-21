@@ -303,10 +303,11 @@ export async function getChapterCompiled(chapterId: string): Promise<CompiledLes
 
 export async function insertChallenge(c: Omit<ChallengeRow, 'id'>): Promise<string> {
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO challenges (book_id, chapter_id, type, prompt, code, options, correct_answer, explanation, difficulty, ord, quest)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11::jsonb) RETURNING id`,
+    `INSERT INTO challenges (book_id, chapter_id, type, prompt, code, options, correct_answer, explanation, difficulty, ord, quest, language, starter_code, tests, reference_solution)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11::jsonb, $12, $13, $14::jsonb, $15) RETURNING id`,
     [c.bookId, c.chapterId, c.type, c.prompt, c.code, c.options ? JSON.stringify(c.options) : null, c.correctAnswer, c.explanation, c.difficulty, c.ord,
-     c.quest ? JSON.stringify(c.quest) : null]
+     c.quest ? JSON.stringify(c.quest) : null,
+     c.language ?? null, c.starterCode ?? null, c.tests ? JSON.stringify(c.tests) : null, c.referenceSolution ?? null]
   );
   return row!.id;
 }
@@ -385,6 +386,8 @@ function mapChallenge(r: any): ChallengeRow {
     code: r.code ?? null, options: r.options ?? null, correctAnswer: r.correct_answer,
     explanation: r.explanation, difficulty: r.difficulty, ord: r.ord,
     quest: r.quest ?? null,
+    language: r.language ?? null, starterCode: r.starter_code ?? null,
+    tests: r.tests ?? null, referenceSolution: r.reference_solution ?? null,
   };
 }
 
@@ -406,9 +409,11 @@ export async function getChallenge(id: string): Promise<ChallengeRow | null> {
 /** Replace one challenge in place (same id, chapter, and ord) — review/regenerate. */
 export async function replaceChallenge(id: string, c: Omit<ChallengeRow, 'id'>): Promise<void> {
   await query(
-    `UPDATE challenges SET type = $2, prompt = $3, code = $4, options = $5::jsonb, correct_answer = $6, explanation = $7, difficulty = $8, ord = $9
+    `UPDATE challenges SET type = $2, prompt = $3, code = $4, options = $5::jsonb, correct_answer = $6, explanation = $7, difficulty = $8, ord = $9,
+       language = $10, starter_code = $11, tests = $12::jsonb, reference_solution = $13
      WHERE id = $1`,
-    [id, c.type, c.prompt, c.code, c.options ? JSON.stringify(c.options) : null, c.correctAnswer, c.explanation, c.difficulty, c.ord]
+    [id, c.type, c.prompt, c.code, c.options ? JSON.stringify(c.options) : null, c.correctAnswer, c.explanation, c.difficulty, c.ord,
+     c.language ?? null, c.starterCode ?? null, c.tests ? JSON.stringify(c.tests) : null, c.referenceSolution ?? null]
   );
 }
 

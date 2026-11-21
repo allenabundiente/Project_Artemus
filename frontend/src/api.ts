@@ -1,7 +1,7 @@
 import type {
   AdminAccount, AuditEntry, AuthResponse, AuthUser, BookChallengeReview, BookDetail, BookMeta, Challenge, DungeonFetchResult, DungeonMap,
   FeatureRow, GameMode, GenerateResult, GuildAdminInfo, GuildClassGroup, GuildInfo, GuildProfessor, LeaderboardResponse, LessonOverview, LlmStatus,
-  MapConfig, MapResolve, Progress, QuizMode, RegenerateAllResult, RosterEntry, ScoreResultResponse, ShopItem, TermSettings,
+  MapConfig, MapResolve, Progress, QuizMode, RegenerateAllResult, RosterEntry, RunTestsResponse, ScoreResultResponse, ShopItem, TermSettings,
   ThemeMeta, UploadResult, WardrobeResponse,
 } from './types';
 
@@ -406,6 +406,29 @@ export async function getBookChallenges(bookId: string): Promise<BookChallengeRe
 /** Reject one challenge and have a fresh one generated in its place. */
 export async function regenerateChallenge(challengeId: string, term: string = 'prelims'): Promise<{ challenge: Challenge }> {
   return send(`/api/challenges/${challengeId}/regenerate`, 'POST', { term });
+}
+
+/**
+ * Run a program against a code exercise's tests. The SERVER decides whether it
+ * passed — the client only displays the per-test results.
+ */
+export async function runChallengeTests(challengeId: string, source: string, sample = false): Promise<RunTestsResponse> {
+  return send<RunTestsResponse>(`/api/challenges/${challengeId}/run-tests`, 'POST', { source, sample });
+}
+
+/** Teacher edit for a code exercise. The server re-verifies the reference solution. */
+export async function updateCodeExercise(
+  challengeId: string,
+  payload: {
+    prompt: string;
+    starterCode: string;
+    language: string;
+    tests: { name: string; stdin: string; expectedStdout: string; hidden: boolean }[];
+    referenceSolution: string;
+    explanation: string;
+  },
+): Promise<{ challenge: Challenge; verified: boolean }> {
+  return send(`/api/challenges/${challengeId}/code`, 'PUT', payload);
 }
 
 export async function listBooks(): Promise<BookMeta[]> {
